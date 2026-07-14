@@ -1181,7 +1181,11 @@ window.onload = () => {
         const registerChain = (dirPath) => {
             dirPath.split('/').reduce((acc, seg) => {
                 const path = acc ? acc + '/' + seg : seg;
-                if (path && !p.folders.includes(path)) p.folders.push(path);
+                if (path && !p.folders.includes(path)) {
+                    p.folders.push(path);
+                    // Dropped folders start collapsed (existing folders keep their current state).
+                    if (JungleUI.collapsedFolders) JungleUI.collapsedFolders.add(path);
+                }
                 return path;
             }, '');
         };
