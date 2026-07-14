@@ -350,9 +350,10 @@ function executeTerminalCommand(cmdLine) {
         case 'analyze':
         case 'lint':
             if (!p) { terminalPrint(`No project open.\n`); break; }
-            { const issues = JungleScanner.scan(selectedLanguages[0], p.files[p.currentFile] || '');
+            { const fileLang = JungleIntelligence.languageFromFilename(p.currentFile, selectedLanguages[0]);
+              const issues = JungleScanner.scan(fileLang, p.files[p.currentFile] || '');
               if (typeof JungleAnalyzer !== 'undefined') {
-                  try { issues.push(...JungleAnalyzer.analyze(selectedLanguages[0], p.files, p.currentFile)); } catch (_) {}
+                  try { issues.push(...JungleAnalyzer.analyze(fileLang, p.files, p.currentFile)); } catch (_) {}
               }
               issues.sort((a, b) => (a.line || 0) - (b.line || 0));
               if (issues.length === 0) { terminalPrint(`✓ No issues found in ${p.currentFile}\n`); }
@@ -622,42 +623,63 @@ window.handleIframeError = (message, source, lineno, colno) => {
     switchView('console');
     JungleUI.showToast("❌ Runtime error — see Console.", () => switchView('console'));
 };
+// Picks the HTML entry file for a web project, or null if this isn't one.
+// A web project = language is HTML or JavaScript AND the project contains an .html file.
+// This lets a JS-language project still run as a full page (HTML + CSS + JS bundled),
+// so you no longer have to be on the HTML file with HTML selected to see both.
+function webEntryFile(p, lang) {
+    if (lang !== 'HTML' && lang !== 'Javascript') return null;
+    const htmlFiles = Object.keys(p.files).filter(f => /\.html?$/i.test(f));
+    if (htmlFiles.length === 0) return null;
+    if (/\.html?$/i.test(p.currentFile)) return p.currentFile; // prefer the HTML you're viewing
+    return htmlFiles.find(f => /(^|\/)index\.html?$/i.test(f)) || htmlFiles.slice().sort()[0];
+}
+// Renders a full web page — the entry HTML with all referenced CSS/JS inlined — in the preview.
+function runWebPreview(entryFile) {
+    const p = JungleUI.getCurrentProject();
+    if (!p) return;
+    try {
+        const html = p.files[entryFile] || '';
+        const missingAssets = JungleIntelligence.findMissingHtmlAssets(html, p.files);
+        if (missingAssets.length > 0) {
+            const missing = missingAssets[0];
+            showConsoleIssues([{ severity: 'error', line: missing.line, column: null, kind: 'RunError',
+                msg: `Missing file referenced: ${missing.file}`, hint: 'Add the referenced file to the project or fix the path.' }], entryFile);
+            switchView('console');
+            JungleUI.showToast("❌ Failed to run — see Console.", () => switchView('console'));
+            return;
+        }
+        terminalStatus.textContent = "READY";
+        terminalStatus.className = "text-[#74a896]";
+        terminalViewBody.textContent = "";
+        switchView('preview');
+        const iframeWin = previewFrame.contentWindow, doc = iframeWin.document;
+        let frameCompileError = false;
+        iframeWin.onerror = function(message, source, lineno, colno) { frameCompileError = true; window.handleIframeError(message, source, lineno, colno); return true; };
+        doc.open();
+        const htmlWithAssets = JungleIntelligence.injectProjectAssetsIntoHtml(html, p.files);
+        const errorBubbleInjectedCode = `<script>window.onerror = function(m, s, l, c) { if (window.parent && window.parent.handleIframeError) { window.parent.handleIframeError(m, s, l, c); } return true; };<\/script>` + htmlWithAssets;
+        doc.write(errorBubbleInjectedCode);
+        doc.close();
+        setTimeout(() => { if (!frameCompileError) JungleUI.showToast("Webpage loaded successfully in Preview panel."); }, 150);
+    } catch(e) {
+        console.error("Frame writing blocked", e);
+        showConsoleIssues([{ severity: 'error', line: null, column: null, kind: 'RunError',
+            msg: e.message || 'The page could not be rendered.', hint: 'Check the HTML/JS for errors.' }], entryFile);
+        switchView('console');
+        JungleUI.showToast("❌ Failed to run — see Console.", () => switchView('console'));
+    }
+}
 runBtn.onclick = () => {
     const p = JungleUI.getCurrentProject();
     if (!p) return;
-    const isHtml = (p.currentFile.endsWith('.html') || p.currentFile.endsWith('.htm')) && selectedLanguages[0] === 'HTML';
-    if (isHtml) {
-        try {
-            const missingAssets = JungleIntelligence.findMissingHtmlAssets(p.files[p.currentFile], p.files);
-            if (missingAssets.length > 0) {
-                const missing = missingAssets[0];
-                showConsoleIssues([{ severity: 'error', line: missing.line, column: null, kind: 'RunError',
-                    msg: `Missing file referenced: ${missing.file}`, hint: 'Add the referenced file to the project or fix the path.' }], p.currentFile);
-                switchView('console');
-                JungleUI.showToast("❌ Failed to run — see Console.", () => switchView('console'));
-                return;
-            }
-            terminalStatus.textContent = "READY";
-            terminalStatus.className = "text-[#74a896]";
-            terminalViewBody.textContent = "";
-            switchView('preview');
-            const iframeWin = previewFrame.contentWindow, doc = iframeWin.document;
-            let frameCompileError = false;
-            iframeWin.onerror = function(message, source, lineno, colno) { frameCompileError = true; window.handleIframeError(message, source, lineno, colno); return true; };
-            doc.open();
-            const htmlWithAssets = JungleIntelligence.injectProjectAssetsIntoHtml(p.files[p.currentFile], p.files);
-            const errorBubbleInjectedCode = `<script>window.onerror = function(m, s, l, c) { if (window.parent && window.parent.handleIframeError) { window.parent.handleIframeError(m, s, l, c); } return true; };<\/script>` + htmlWithAssets;
-            doc.write(errorBubbleInjectedCode);
-            doc.close();
-            setTimeout(() => { if (!frameCompileError) JungleUI.showToast("Webpage loaded successfully in Preview panel."); }, 150);
-        } catch(e) {
-            console.error("Frame writing blocked", e);
-            showConsoleIssues([{ severity: 'error', line: null, column: null, kind: 'RunError',
-                msg: e.message || 'The page could not be rendered.', hint: 'Check the HTML/JS for errors.' }], p.currentFile);
-            switchView('console');
-            JungleUI.showToast("❌ Failed to run — see Console.", () => switchView('console'));
-        }
-    } else { JungleRunner.execute(selectedLanguages[0], p.files[p.currentFile], p.files); }
+    const lang = selectedLanguages[0];
+    const entry = webEntryFile(p, lang);
+    if (entry) {
+        runWebPreview(entry);
+    } else {
+        JungleRunner.execute(lang, p.files[p.currentFile], p.files);
+    }
 };
 tabPreview.onclick = runBtn.onclick;
 tabTerminalBtn.onclick = () => { switchView('terminal', true); };
@@ -1000,7 +1022,12 @@ function scheduleLiveAnalysis() {
 function runLiveAnalysis() {
     const p = JungleUI.getCurrentProject();
     if (!p || !p.currentFile) return;
-    const lang = selectedLanguages[0];
+    // Scan the file as ITS OWN language (by extension), not the project's selected language —
+    // otherwise a .py/.cpp/etc. file in a JS project gets scanned with the wrong rules and
+    // lights up with hundreds of false errors. Unknown / non-code types (.txt, .json, .md,
+    // images, etc.) aren't scanned at all — there's nothing meaningful to check.
+    const lang = JungleIntelligence.extensionLanguages[JungleIntelligence.getExtension(p.currentFile)];
+    if (!lang) { showConsoleIssues([], p.currentFile); return; }
     let issues = [];
     try { issues = JungleScanner.scan(lang, p.files[p.currentFile] || ''); } catch (_) {}
     if (typeof JungleAnalyzer !== 'undefined') {

@@ -177,7 +177,9 @@ class JungleIntelligence {
         '.asm': 'Assembly',
         '.s': 'Assembly',
         '.lisp': 'Lisp',
-        '.pas': 'Pascal'
+        '.pas': 'Pascal',
+        '.css': 'CSS',
+        '.sql': 'SQL'
     };
     static getExtension(name) {
         const match = String(name || '').toLowerCase().match(/(\.[a-z0-9+#]+)$/);
