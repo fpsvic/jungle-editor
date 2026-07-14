@@ -58,6 +58,13 @@
                     </div>
                     <button class="toggle-switch" id="toggle-analysis" role="switch" aria-checked="true"><span class="toggle-knob"></span></button>
                 </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Whole-Project Analysis</div>
+                        <div class="setting-desc">For big projects: the analyzer maps every file across all folders and scans the entire project for bugs at once (grouped by file), instead of only the file you're viewing.</div>
+                    </div>
+                    <button class="toggle-switch" id="toggle-project-scan" role="switch" aria-checked="false"><span class="toggle-knob"></span></button>
+                </div>
             </div>
             <div class="settings-section">
                 <div class="settings-section-title">Appearance</div>

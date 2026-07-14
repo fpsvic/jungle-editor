@@ -1019,9 +1019,72 @@ function scheduleLiveAnalysis() {
     if (_liveAnalysisTimer) clearTimeout(_liveAnalysisTimer);
     _liveAnalysisTimer = setTimeout(runLiveAnalysis, 500);
 }
+// Renders a whole-project bug report into the Console: a summary line, then each file that
+// has issues (file name is clickable to open it) with its findings underneath.
+function showProjectIssues(report) {
+    consoleViewBody.innerHTML = '';
+    let errors = 0;
+    report.results.forEach(r => { errors += r.issues.filter(i => i.severity === 'error').length; });
+    const warnings = report.total - errors;
+    consoleStatus.textContent = errors ? `${errors} ERROR${errors > 1 ? 'S' : ''}` : report.total ? `${warnings} WARN` : 'CLEAR';
+    consoleStatus.style.color = errors ? '#FF5555' : report.total ? '#FFB86C' : '#74a896';
+    const line = (text, color, extra) => {
+        const d = document.createElement('div');
+        d.textContent = text;
+        if (color) d.style.color = color;
+        if (extra) d.style.cssText += extra;
+        consoleViewBody.appendChild(d);
+        return d;
+    };
+    line(`Project analysis — ${report.scanned} code file${report.scanned === 1 ? '' : 's'} mapped · ${report.total} issue${report.total === 1 ? '' : 's'} across ${report.results.length} file${report.results.length === 1 ? '' : 's'}`, '#4a6057');
+    if (report.total === 0) { line('✓ No issues detected across the project.', '#74a896'); return; }
+    for (const r of report.results) {
+        const e = r.issues.filter(i => i.severity === 'error').length;
+        const w = r.issues.length - e;
+        const summary = [e ? `${e} error${e > 1 ? 's' : ''}` : '', w ? `${w} warning${w > 1 ? 's' : ''}` : ''].filter(Boolean).join(', ');
+        const head = line(`📄 ${r.file}  [${r.lang}] — ${summary}`, e ? '#FF5555' : '#FFB86C', 'font-weight:700;margin-top:10px;cursor:pointer;');
+        head.title = 'Open this file';
+        head.onclick = () => JungleUI.switchToFile(r.file);
+        for (const i of r.issues) {
+            const color = i.severity === 'error' ? '#FF5555' : i.severity === 'warning' ? '#FFB86C' : '#74a896';
+            const icon = i.severity === 'error' ? '✗' : i.severity === 'warning' ? '⚠' : 'ℹ';
+            line(`   ${icon} Line ${i.line || '?'}  [${i.kind || i.severity}]  ${i.msg}`, color);
+            if (i.hint) line(`       💡 ${i.hint}`, '#5c7a6e');
+        }
+    }
+}
+// Map every code file in the project (path -> language, skipping non-code files) and scan
+// each one for bugs. The analyzer gets the whole `files` map so cross-file checks still work.
+// Returns { map:[{file,lang,folder}], results:[{file,lang,issues}], scanned, total }.
+function analyzeWholeProject(p) {
+    const map = [], results = [];
+    let total = 0;
+    for (const fname of Object.keys(p.files).sort()) {
+        const lang = JungleIntelligence.extensionLanguages[JungleIntelligence.getExtension(fname)];
+        if (!lang) continue; // non-code / data file — nothing to scan
+        const folder = fname.includes('/') ? fname.slice(0, fname.lastIndexOf('/')) : '';
+        map.push({ file: fname, lang, folder });
+        let issues = [];
+        try { issues = JungleScanner.scan(lang, p.files[fname] || ''); } catch (_) {}
+        if (typeof JungleAnalyzer !== 'undefined') {
+            try { issues.push(...JungleAnalyzer.analyze(lang, p.files, fname)); } catch (_) {}
+        }
+        if (issues.length) {
+            issues.sort((a, b) => (a.line || 0) - (b.line || 0));
+            results.push({ file: fname, lang, issues });
+            total += issues.length;
+        }
+    }
+    return { map, results, scanned: map.length, total };
+}
 function runLiveAnalysis() {
     const p = JungleUI.getCurrentProject();
     if (!p || !p.currentFile) return;
+    // Whole-project mode (opt-in setting): map + scan every file, report bugs grouped by file.
+    if (typeof JungleSettings !== 'undefined' && JungleSettings.get('projectScan')) {
+        showProjectIssues(analyzeWholeProject(p));
+        return;
+    }
     // Scan the file as ITS OWN language (by extension), not the project's selected language —
     // otherwise a .py/.cpp/etc. file in a JS project gets scanned with the wrong rules and
     // lights up with hundreds of false errors. Unknown / non-code types (.txt, .json, .md,
@@ -1321,6 +1384,7 @@ window.onload = () => {
     const openBtn = document.getElementById('open-settings-btn');
     const backBtn = document.getElementById('settings-back');
     const analysisToggle = document.getElementById('toggle-analysis');
+    const projectScanToggle = document.getElementById('toggle-project-scan');
     const themeChoice = document.getElementById('theme-choice');
     const executionModeChoice = document.getElementById('execution-mode-choice');
     if (!settingsScreen) return;
@@ -1333,6 +1397,11 @@ window.onload = () => {
         const enabled = !JungleSettings.get('disableAnalysis');
         analysisToggle.classList.toggle('on', enabled);
         analysisToggle.setAttribute('aria-checked', String(enabled));
+        if (projectScanToggle) {
+            const on = !!JungleSettings.get('projectScan');
+            projectScanToggle.classList.toggle('on', on);
+            projectScanToggle.setAttribute('aria-checked', String(on));
+        }
         const theme = JungleSettings.get('theme');
         themeChoice.querySelectorAll('.theme-opt').forEach(b =>
             b.classList.toggle('selected', b.dataset.theme === theme));
@@ -1354,6 +1423,15 @@ window.onload = () => {
         JungleUI.showToast(
             willEnable ? 'Scanners & analyzers enabled' : 'Scanners & analyzers OFF — code now runs even with errors',
             willEnable ? 'success' : 'error');
+    };
+
+    if (projectScanToggle) projectScanToggle.onclick = () => {
+        const willEnable = !projectScanToggle.classList.contains('on');
+        JungleSettings.set('projectScan', willEnable);
+        syncUI();
+        // Refresh the Console immediately to reflect the new mode.
+        if (typeof runLiveAnalysis === 'function') runLiveAnalysis();
+        JungleUI.showToast(willEnable ? 'Whole-project analysis on — scanning all files' : 'Whole-project analysis off — scanning current file only', willEnable ? 'success' : 'info');
     };
 
     themeChoice.querySelectorAll('.theme-opt').forEach(btn => {
