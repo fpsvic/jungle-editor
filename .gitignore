@@ -1,0 +1,8 @@
+# Claude Code local settings (machine-specific)
+.claude/
+
+# Windows shortcut / OS cruft
+*.lnk
+Thumbs.db
+Desktop.ini
+.DS_Store
