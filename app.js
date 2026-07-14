@@ -1245,6 +1245,13 @@ window.onload = () => {
             // Fallback for browsers without directory-entry support: flat file list.
             Array.from(dataTransfer.files || []).forEach(f => out.files.push({ path: f.name, file: f }));
         }
+        // Browsers block reading a folder's CONTENTS when the page is opened as a local file
+        // (file://). The folder entry comes through but readEntries() returns nothing, so it
+        // looks empty. Warn instead of silently importing an empty folder. Serving over http
+        // (e.g. VS Code's preview) lifts the restriction.
+        if (location.protocol === 'file:' && out.folders.size > 0 && out.files.length === 0) {
+            JungleUI.showToast('⚠️ Folder contents can’t be read when opened as a local file (file://). Run Jungle Editor through a local server or the VS Code preview to import folders.', 'error');
+        }
         await importCollected(out);
     }
     zones.forEach(zone => {
