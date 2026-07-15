@@ -1526,8 +1526,25 @@ window.onload = () => {
     tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button>');
     const button = document.getElementById('split-editor-btn');
     const style = document.createElement('style');
-    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn:hover,#split-editor-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-pane textarea{flex:1;min-height:0;resize:none;border:0;outline:0;padding:12px 20px;background:#0b0d10;color:#d1d5db;caret-color:#74a896;font:14px/22px Fira Code,Consolas,monospace;tab-size:4}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.split-active #line-gutter{padding-bottom:calc(50% + 20px)}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
+    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.tools-icon-btn:hover,#split-editor-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-code{position:relative;flex:1;min-height:0}.stacked-code pre,.stacked-code textarea{position:absolute;inset:0;margin:0;padding:12px 20px;box-sizing:border-box;font:14px/22px Fira Code,Consolas,monospace;white-space:pre;tab-size:4}.stacked-code pre{pointer-events:none;overflow:hidden;color:#d1d5db}.stacked-code textarea{resize:none;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:#74a896;overflow:auto}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
     document.head.appendChild(style);
+    let focusedPane = 'primary';
+    editor.addEventListener('focus', () => { focusedPane = 'primary'; });
+    const switchPrimaryFile = JungleUI.switchToFile.bind(JungleUI);
+    JungleUI.switchToFile = function(filename) {
+        const secondary = container.querySelector('.stacked-pane');
+        if (focusedPane === 'secondary' && secondary) {
+            const project = this.getCurrentProject();
+            const select = secondary.querySelector('select'), textarea = secondary.querySelector('textarea'), overlay = secondary.querySelector('pre');
+            if (project && project.files[filename] !== undefined) {
+                select.value = filename; textarea.value = project.files[filename] || '';
+                const language = JungleIntelligence.languageFromFilename(filename, project.lang || selectedLanguages[0]);
+                overlay.innerHTML = JungleUI.highlightCode(language, textarea.value.endsWith('\n') ? textarea.value + ' ' : textarea.value);
+                textarea.focus(); return;
+            }
+        }
+        return switchPrimaryFile(filename);
+    };
     const closeSplit = () => { container.querySelector('.stacked-pane')?.remove(); container.classList.remove('split-active'); button.classList.remove('active'); };
     button.onclick = () => {
         if (container.classList.contains('split-active')) return closeSplit();
@@ -1535,11 +1552,14 @@ window.onload = () => {
         const files = Object.keys(project.files); if (!files.length) return;
         const other = files.find(file => file !== project.currentFile) || project.currentFile;
         const pane = document.createElement('section'); pane.className = 'stacked-pane';
-        pane.innerHTML = '<div class="stacked-pane-header">Second editor <select></select></div><textarea spellcheck="false"></textarea>';
-        const select = pane.querySelector('select'), textarea = pane.querySelector('textarea');
-        const refresh = () => { select.innerHTML = files.map(file => `<option value="${file}">${file}</option>`).join(''); select.value = other; textarea.value = project.files[select.value] || ''; };
-        select.onchange = () => { textarea.value = project.files[select.value] || ''; textarea.focus(); };
-        textarea.oninput = () => { project.files[select.value] = textarea.value; JungleStorage.saveProjects(projects); };
+        pane.innerHTML = '<div class="stacked-pane-header">Second editor <select></select></div><div class="stacked-code"><pre></pre><textarea spellcheck="false"></textarea></div>';
+        const select = pane.querySelector('select'), textarea = pane.querySelector('textarea'), overlay = pane.querySelector('pre');
+        const refreshHighlight = () => { const language = JungleIntelligence.languageFromFilename(select.value, project.lang || selectedLanguages[0]); overlay.innerHTML = JungleUI.highlightCode(language, textarea.value.endsWith('\n') ? textarea.value + ' ' : textarea.value); };
+        const refresh = () => { select.innerHTML = files.map(file => `<option value="${file}">${file}</option>`).join(''); select.value = other; textarea.value = project.files[select.value] || ''; refreshHighlight(); };
+        select.onchange = () => { textarea.value = project.files[select.value] || ''; refreshHighlight(); textarea.focus(); };
+        textarea.oninput = () => { project.files[select.value] = textarea.value; refreshHighlight(); JungleStorage.saveProjects(projects); };
+        textarea.addEventListener('focus', () => { focusedPane = 'secondary'; });
+        textarea.onscroll = () => { overlay.scrollTop = textarea.scrollTop; overlay.scrollLeft = textarea.scrollLeft; };
         textarea.onkeydown = event => { if (event.key === 'Tab') { event.preventDefault(); const start = textarea.selectionStart; textarea.setRangeText('    ', start, textarea.selectionEnd, 'end'); textarea.dispatchEvent(new Event('input')); } };
         refresh(); container.appendChild(pane); container.classList.add('split-active'); button.classList.add('active');
     };
