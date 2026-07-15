@@ -143,6 +143,11 @@
             <div class="editor-header">
                 <div class="header-left">
                     <button class="exit-hub-btn" id="exit-to-hub-header-btn" title="Return to Projects Hub">← Exit to Hub</button>
+                    <div class="tools-control">
+                        <button class="tools-icon-btn" id="tools-btn" title="Tools" aria-label="Tools" aria-expanded="false">⚙</button>
+                        <div class="tools-menu" id="tools-menu"><button id="find-bugs-tool" type="button">Find Bugs <span>›</span></button><button id="multilang-tool" type="button">Multi-language Extension <span>›</span></button></div>
+                        <div class="bug-language-menu" id="bug-language-menu" aria-label="Choose a language for bug scanning"></div>
+                    </div>
                     <div class="language-selector-wrapper" style="display:none;">
                         <button class="language-btn" id="language-btn">
                             <span id="current-language-text">Language: Javascript</span>

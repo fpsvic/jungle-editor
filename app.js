@@ -35,6 +35,7 @@ var consoleViewContainer = document.getElementById('console-view-container');
 var projectViewContainer = document.getElementById('project-view-container');
 var consoleViewBody = document.getElementById('console-view-body');
 var consoleStatus = document.getElementById('console-status');
+var jungleTextEngine = new JungleTextEngine(editor);
 // --- Core State Variables ---
 var projects = [];
 var currentProjectId = null;
@@ -1453,4 +1454,65 @@ window.onload = () => {
     // Apply persisted settings on first load.
     applyTheme(JungleSettings.get('theme'));
     syncUI();
+})();
+
+// Tools: multi-language scanning is deliberately isolated from normal editing mode.
+(function initBugTools() {
+    const toolsBtn = document.getElementById('tools-btn');
+    const toolsMenu = document.getElementById('tools-menu');
+    const languageMenu = document.getElementById('bug-language-menu');
+    const findBugs = document.getElementById('find-bugs-tool');
+    const multiLanguage = document.getElementById('multilang-tool');
+    if (!toolsBtn || !toolsMenu || !languageMenu) return;
+    const extras = ['CSS','JSON','YAML','XML','Markdown','Vue','Svelte','React','Angular','Dockerfile','Makefile','Terraform','GraphQL','PowerShell','Batch','Fish','Racket','Scheme','Reason','Elm','Fennel','Verilog','VHDL','MATLAB','Objective-C'];
+    const languages = [...new Set([...ALL_LANGS, ...extras])].sort();
+    let multiEnabled = false;
+    let scanLanguages = [];
+    const close = () => { toolsMenu.classList.remove('show'); languageMenu.classList.remove('show'); toolsBtn.setAttribute('aria-expanded', 'false'); };
+    const render = () => {
+        languageMenu.innerHTML = languages.map(language => `<button type="button" data-language="${language}" class="${scanLanguages.includes(language) ? 'selected' : ''}">${scanLanguages.includes(language) ? '✓ ' : ''}${LANGUAGE_DISPLAY_NAMES[language] || language}</button>`).join('');
+        languageMenu.querySelectorAll('[data-language]').forEach(button => button.onclick = () => {
+            const language = button.dataset.language;
+            if (multiEnabled) scanLanguages = scanLanguages.includes(language) ? scanLanguages.filter(item => item !== language) : [...scanLanguages, language];
+            else scanLanguages = [language];
+            render();
+            if (scanLanguages.length) runBugScan();
+        });
+    };
+    const runBugScan = () => {
+        const project = JungleUI.getCurrentProject(); if (!project || !scanLanguages.length) return;
+        document.body.classList.add('bug-scan-mode');
+        const results = [], map = [], seen = new Set(); let total = 0;
+        for (const [file, code] of Object.entries(project.files)) for (const language of scanLanguages) {
+            let issues = []; try { issues = JungleScanner.scan(language, code || ''); } catch (_) {}
+            if (typeof JungleAnalyzer !== 'undefined') try { issues.push(...JungleAnalyzer.analyze(language, project.files, file)); } catch (_) {}
+            issues = issues.filter(issue => { const key = `${file}:${language}:${issue.line}:${issue.msg}`; if (seen.has(key)) return false; seen.add(key); return true; });
+            map.push({ file, lang: language, folder: file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '' });
+            if (issues.length) { results.push({ file: `${file} [${language}]`, lang: language, issues }); total += issues.length; }
+        }
+        showProjectIssues({ map, results, scanned: map.length, total }); switchView('console');
+    };
+    toolsBtn.onclick = event => { event.stopPropagation(); const open = !toolsMenu.classList.contains('show'); close(); if (open) { toolsMenu.classList.add('show'); toolsBtn.setAttribute('aria-expanded', 'true'); } };
+    findBugs.onclick = event => { event.stopPropagation(); multiEnabled = false; languageMenu.classList.add('show'); render(); };
+    multiLanguage.onclick = event => { event.stopPropagation(); multiEnabled = true; selectedLanguages = selectedLanguages.length ? selectedLanguages : ['Javascript']; scanLanguages = [...selectedLanguages]; languageMenu.classList.add('show'); render(); };
+    document.addEventListener('click', close);
+    // The Extensions button now remains open while languages are checked or unchecked.
+    renderLangPickerGrid = function(filter) {
+        const filtered = filter ? ALL_LANGS.filter(language => language.toLowerCase().includes(filter)) : ALL_LANGS;
+        langPickerGrid.innerHTML = filtered.map(language => `<div class="lang-picker-card${selectedLanguages.includes(language) ? ' selected' : ''}" data-lang="${language}"><span class="lang-picker-icon">${LANG_ICONS[language] || '📄'}</span><span class="lang-picker-name">${LANGUAGE_DISPLAY_NAMES[language] || language}</span><span class="lang-picker-description">${selectedLanguages.includes(language) ? '✓ Selected' : LANGUAGE_DESCRIPTIONS[language] || ''}</span></div>`).join('');
+        langPickerGrid.querySelectorAll('.lang-picker-card').forEach(card => card.onclick = () => {
+            const language = card.dataset.lang;
+            selectedLanguages = selectedLanguages.includes(language) ? selectedLanguages.filter(item => item !== language) : [...selectedLanguages, language];
+            if (!selectedLanguages.length) selectedLanguages = ['Javascript'];
+            const project = JungleUI.getCurrentProject(); if (project) { project.lang = selectedLanguages[0]; JungleStorage.saveProjects(projects); }
+            currentLanguageText.textContent = selectedLanguages.map(language => LANGUAGE_DISPLAY_NAMES[language] || language).join(', ');
+            renderLangPickerGrid(filter);
+        });
+    };
+    const runCurrentLanguage = runBtn.onclick;
+    runBtn.onclick = async () => {
+        if (selectedLanguages.length < 2) return runCurrentLanguage();
+        const project = JungleUI.getCurrentProject(); if (!project || !project.currentFile) return;
+        for (const language of selectedLanguages) await JungleRunner.execute(language, project.files[project.currentFile] || '', project.files);
+    };
 })();
