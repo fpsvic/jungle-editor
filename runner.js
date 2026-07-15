@@ -76,7 +76,7 @@ class JungleRunner {
             const analysisOn = (typeof JungleSettings === 'undefined') || !JungleSettings.get('disableAnalysis');
             if (analysisOn) {
                 // Regex scanner (current file) + semantic analyzer (project-wide, cross-file).
-                const scanIssues = JungleScanner.scan(lang, code);
+                const scanIssues = await JungleScanner.scanAsync(lang, code);
                 if (typeof JungleAnalyzer !== 'undefined') {
                     try { scanIssues.push(...JungleAnalyzer.analyze(lang, files || { [fname]: code }, fname)); } catch (_) {}
                 }

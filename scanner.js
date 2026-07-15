@@ -19,6 +19,11 @@ class JungleScanner {
     // Async chunked scan — processes 200 lines at a time, yielding between chunks
     // Falls back to sync scan() for files under 500 lines
     static scanAsync(lang, code) {
+        // Tree-sitter provides authoritative syntax structure. The legacy rules
+        // remain a no-network fallback and continue to supply style/security hints.
+        if (typeof JungleAstScanner !== 'undefined' && JungleAstScanner.names[lang]) {
+            return JungleAstScanner.scan(lang, code).catch(() => this.scan(lang, code));
+        }
         const lines = code.split('\n');
         if (lines.length <= 500) {
             return Promise.resolve(this.scan(lang, code));
