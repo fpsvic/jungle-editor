@@ -156,7 +156,7 @@
                     <span id="loc-display">LOC: 0</span>
                     <div class="tools-control">
                         <button class="tools-icon-btn" id="tools-btn" title="Tools" aria-label="Tools" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a4.1 4.1 0 0 0-5.3 5.3L3.1 17.9a1.5 1.5 0 1 0 2.1 2.1l6.3-6.3a4.1 4.1 0 0 0 5.3-5.3l-2.5 2.5-2.2-2.2 2.6-2.4zM14 14l6 6M18.5 14.5l-4 4"/></svg></button>
-                        <div class="tools-menu" id="tools-menu"><button id="find-bugs-tool" type="button">Find Bugs <span>›</span></button><button id="multilang-tool" type="button">Multi-language Extension <span>›</span></button></div>
+                        <div class="tools-menu" id="tools-menu"><button id="find-bugs-tool" type="button">Find Bugs <span>›</span></button><button id="debug-tool" type="button">Debug</button><button id="multilang-tool" type="button">Multi-language Extension <span>›</span></button></div>
                         <div class="bug-language-menu" id="bug-language-menu" aria-label="Choose a language for bug scanning"></div>
                     </div>
                 </div>

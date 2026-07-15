@@ -1462,6 +1462,7 @@ window.onload = () => {
     const toolsMenu = document.getElementById('tools-menu');
     const languageMenu = document.getElementById('bug-language-menu');
     const findBugs = document.getElementById('find-bugs-tool');
+    const debugTool = document.getElementById('debug-tool');
     const multiLanguage = document.getElementById('multilang-tool');
     if (!toolsBtn || !toolsMenu || !languageMenu) return;
     const extras = ['CSS','JSON','YAML','XML','Markdown','Vue','Svelte','React','Angular','Dockerfile','Makefile','Terraform','GraphQL','PowerShell','Batch','Fish','Racket','Scheme','Reason','Elm','Fennel','Verilog','VHDL','MATLAB','Objective-C'];
@@ -1494,7 +1495,29 @@ window.onload = () => {
     };
     toolsBtn.onclick = event => { event.stopPropagation(); const open = !toolsMenu.classList.contains('show'); close(); if (open) { toolsMenu.classList.add('show'); toolsBtn.setAttribute('aria-expanded', 'true'); } };
     findBugs.onclick = event => { event.stopPropagation(); multiEnabled = false; languageMenu.classList.add('show'); render(); };
-    multiLanguage.onclick = event => { event.stopPropagation(); multiEnabled = true; selectedLanguages = selectedLanguages.length ? selectedLanguages : ['Javascript']; scanLanguages = [...selectedLanguages]; languageMenu.classList.add('show'); render(); };
+    multiLanguage.onclick = event => {
+        event.stopPropagation();
+        languageMenu.innerHTML = '<button type="button" data-mode="enable">Enable</button><button type="button" data-mode="disable">Disable</button>';
+        languageMenu.classList.add('show');
+        languageMenu.querySelector('[data-mode="enable"]').onclick = () => { multiEnabled = true; JungleSettings.set('multiLanguage', true); languageMenu.classList.remove('show'); JungleUI.showToast('Multi-language Extension enabled'); };
+        languageMenu.querySelector('[data-mode="disable"]').onclick = () => { multiEnabled = false; selectedLanguages = [selectedLanguages[0] || 'Javascript']; JungleSettings.set('multiLanguage', false); languageMenu.classList.remove('show'); JungleUI.showToast('Multi-language Extension disabled'); };
+    };
+    debugTool.onclick = event => {
+        event.stopPropagation();
+        const project = JungleUI.getCurrentProject(); if (!project) return;
+        document.body.classList.add('bug-scan-mode');
+        let fixed = 0, checked = 0;
+        for (const [file, code] of Object.entries(project.files)) {
+            const language = JungleIntelligence.languageFromFilename(file, project.lang || selectedLanguages[0]);
+            let repaired; try { repaired = JungleDebugger.debugFile(code || '', language, (lang, source) => JungleScanner.scan(lang, source)); } catch (_) { continue; }
+            checked++;
+            if (repaired.accepted) { project.files[file] = repaired.code; fixed += repaired.changed; }
+        }
+        JungleStorage.saveProjects(projects);
+        if (project.currentFile) { editor.value = project.files[project.currentFile] || ''; JungleUI.updateCodeHighlight(); }
+        runBugScan();
+        JungleUI.showToast(fixed ? `Debug verified and applied ${fixed} safe fix${fixed === 1 ? '' : 'es'} across ${checked} file${checked === 1 ? '' : 's'}` : `Debug checked ${checked} file${checked === 1 ? '' : 's'} — no verified safe fixes`);
+    };
     document.addEventListener('click', close);
     // The Extensions button now remains open while languages are checked or unchecked.
     renderLangPickerGrid = function(filter) {
