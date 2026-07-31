@@ -36,6 +36,20 @@ var projectViewContainer = document.getElementById('project-view-container');
 var consoleViewBody = document.getElementById('console-view-body');
 var consoleStatus = document.getElementById('console-status');
 var jungleTextEngine = new JungleTextEngine(editor);
+var runFullscreenButton = document.createElement('button');
+runFullscreenButton.id = 'run-fullscreen-btn';
+runFullscreenButton.type = 'button';
+runFullscreenButton.title = 'Toggle fullscreen preview';
+runFullscreenButton.setAttribute('aria-label', 'Toggle fullscreen preview');
+runFullscreenButton.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M21 16v5h-5"/></svg>';
+workspaceContainer.querySelector('.main-content').appendChild(runFullscreenButton);
+runFullscreenButton.onclick = async () => {
+    try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await workspaceContainer.requestFullscreen();
+    } catch (_) { JungleUI.showToast('Fullscreen is unavailable in this browser.'); }
+};
+document.addEventListener('fullscreenchange', () => runFullscreenButton.classList.toggle('active', !!document.fullscreenElement));
 // --- Core State Variables ---
 var projects = [];
 var currentProjectId = null;
@@ -450,6 +464,7 @@ function switchView(view, showInput = false) {
     tabConsoleBtn.classList.remove('active');
     tabTerminalBtn.classList.remove('bg-[#1c2522]', 'text-[#74a896]', 'border-[#528b74]');
     terminalInput.setAttribute('disabled', 'true');
+    runFullscreenButton.style.display = 'none';
     const terminalInputRow = document.getElementById('terminal-input-row');
     terminalInputRow.classList.add('hidden');
     if (view === 'editor') {
@@ -457,6 +472,7 @@ function switchView(view, showInput = false) {
     } else if (view === 'preview') {
         previewFrame.style.display = 'block';
         tabPreview.classList.add('active');
+        runFullscreenButton.style.display = 'grid';
     } else if (view === 'terminal') {
         terminalViewContainer.style.display = 'flex';
         tabTerminalBtn.classList.add('bg-[#1c2522]', 'text-[#74a896]', 'border-[#528b74]');

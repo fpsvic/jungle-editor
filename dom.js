@@ -65,6 +65,8 @@
                     </div>
                     <button class="toggle-switch" id="toggle-project-scan" role="switch" aria-checked="false"><span class="toggle-knob"></span></button>
                 </div>
+                <div class="setting-row"><div class="setting-info"><div class="setting-name">Debugger Namespaces</div><div class="setting-desc">Allow Debug to inspect namespace-qualified code.</div></div><button class="toggle-switch" id="toggle-debug-namespaces" role="switch" aria-checked="false"><span class="toggle-knob"></span></button></div>
+                <div class="setting-row"><div class="setting-info"><div class="setting-name">Debugger Repair Level</div><div class="setting-desc">Low risk preserves behavior; High risk enables behavior-changing cleanup.</div></div><div class="execution-mode-choice" id="debug-risk-choice"><button class="execution-mode-opt" data-risk="low">Low Risk</button><button class="execution-mode-opt" data-risk="high">High Risk</button></div></div>
             </div>
             <div class="settings-section">
                 <div class="settings-section-title">Appearance</div>

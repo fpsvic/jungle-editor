@@ -76,6 +76,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .main-content { flex: 1; display: flex; flex-direction: column; background-color: #0b0d10; position: relative; }
 .editor-header { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background-color: #111413; border-bottom: 1px solid #1c2321; }
 .editor-header h2 { margin: 0; font-size: 0.95rem; font-weight: 600; color: #aed9cb; }
+#run-fullscreen-btn{position:absolute;top:12px;right:16px;z-index:12;display:none;place-items:center;width:32px;height:32px;background:#161c1a;color:#aed9cb;border:1px solid #528b74;border-radius:6px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.35)}#run-fullscreen-btn:hover,#run-fullscreen-btn.active{background:#1c3028;color:#fff}#run-fullscreen-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .header-left { display: flex; align-items: center; gap: 15px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 .exit-hub-btn { background-color: #161c1a; color: #a4b3b0; border: 1px solid #232d2a; padding: 8px 16px; font-size: 0.85rem; font-weight: 600; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 6px; transition: all 0.2s ease; }

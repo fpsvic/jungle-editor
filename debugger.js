@@ -4,13 +4,16 @@ class JungleDebugger {
     static errorCount(issues) { return (issues || []).filter(issue => issue.severity === 'error').length; }
     static repair(code, issues, language) {
         let text = String(code || ''), changed = 0, fixes = [];
+        const namespaces = typeof JungleSettings !== 'undefined' && JungleSettings.get('debugNamespaces');
+        const highRisk = typeof JungleSettings !== 'undefined' && JungleSettings.get('debugRisk') === 'high';
         for (const issue of issues || []) {
             const line = Number(issue.line) - 1;
             const rows = text.split('\n'); if (line < 0 || line >= rows.length) continue;
             const before = rows[line]; let after = before;
             if (language === 'Python' && /missing a trailing colon/i.test(issue.msg) && /\b(?:if|elif|else|for|while|def|class|try|except|finally|with|match|case)\b/.test(before)) after = before.replace(/\s*$/, ':');
             else if (language === 'Python' && /print statement is missing parentheses/i.test(issue.msg)) after = before.replace(/^(\s*)print\s+(.+)$/, '$1print($2)');
-            else if ((language === 'Javascript' || language === 'TypeScript') && /loose equality/i.test(issue.msg)) after = before.replace(/(^|[^=!])==(?!=)/, '$1===');
+            else if ((language === 'Javascript' || language === 'TypeScript') && /loose equality/i.test(issue.msg) && (namespaces || !/\b[A-Za-z_$][\w$]*\./.test(before))) after = before.replace(/(^|[^=!])==(?!=)/, '$1===');
+            else if (highRisk && /console\.log\(\) debug statement/i.test(issue.msg)) after = before.replace(/^\s*console\.log\([^\n]*\);?\s*$/, '');
             else if (language === 'Python' && /does not use '==='/.test(issue.msg)) after = before.replace(/===/g, '==');
             else if (/Expected an indented block/i.test(issue.msg) && line + 1 < rows.length && rows[line + 1].trim()) {
                 const indent = (before.match(/^\s*/) || [''])[0]; rows[line + 1] = indent + '    ' + rows[line + 1].trimStart(); text = rows.join('\n'); changed++; continue;

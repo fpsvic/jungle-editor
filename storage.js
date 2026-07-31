@@ -1,6 +1,6 @@
 // --- User settings (persisted, separate from project data) ---
 class JungleSettings {
-    static DEFAULTS = { disableAnalysis: false, theme: 'midnight', executionMode: 'interpreter', projectScan: false };
+    static DEFAULTS = { disableAnalysis: false, theme: 'midnight', executionMode: 'interpreter', projectScan: false, debugNamespaces: false, debugRisk: 'low' };
     static _cache = null;
     static all() {
         if (this._cache) return this._cache;
