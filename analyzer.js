@@ -18,14 +18,15 @@ class JungleAnalyzer {
             files = files || {};
             if (!(currentFile in files)) files = { [currentFile || 'file']: files[currentFile] ?? '' };
             const projectReferences = this.analyzeProjectReferences(lang, files, currentFile);
-            if (lang === 'Python') return [...this.analyzePython(files, currentFile), ...projectReferences];
+            const topology = this.analyzeProjectTopology(lang, files, currentFile);
+            if (lang === 'Python') return [...this.analyzePython(files, currentFile), ...projectReferences, ...topology];
             if (lang === 'Javascript' || lang === 'TypeScript') {
-                return [...this.analyzeJsCrossFile(lang, files, currentFile), ...this.analyzeLocalImports(lang, files, currentFile)];
+                return [...this.analyzeJsCrossFile(lang, files, currentFile), ...this.analyzeLocalImports(lang, files, currentFile), ...topology];
             }
-            if (lang === 'HTML') return [...this.analyzeHtmlAssets(files, currentFile), ...projectReferences];
-            if (lang === 'CSS') return [...this.analyzeCssAssets(files, currentFile), ...projectReferences];
-            if (lang === 'Nim' || lang === 'Dart' || lang === 'Zig' || lang === 'Julia') return [...this.analyzeGenericCrossFile(lang, files, currentFile), ...projectReferences];
-            return projectReferences;
+            if (lang === 'HTML') return [...this.analyzeHtmlAssets(files, currentFile), ...projectReferences, ...topology];
+            if (lang === 'CSS') return [...this.analyzeCssAssets(files, currentFile), ...projectReferences, ...topology];
+            if (lang === 'Nim' || lang === 'Dart' || lang === 'Zig' || lang === 'Julia') return [...this.analyzeGenericCrossFile(lang, files, currentFile), ...projectReferences, ...topology];
+            return [...projectReferences, ...topology];
         } catch (e) {
             // Never let analysis crash the editor — degrade to "no findings".
             return [];
@@ -478,6 +479,50 @@ class JungleAnalyzer {
                 if (!seen.has(key)) { seen.add(key); issues.push(issue); }
             }
         }
+        return issues;
+    }
+
+    // Repository topology checks are intentionally narrow: they only consider literal,
+    // relative JS/TS imports. This catches a frequent large-project failure mode without
+    // guessing about aliases, package exports, generated code, or framework conventions.
+    static analyzeProjectTopology(lang, files, currentFile) {
+        const issues = [];
+        const names = Object.keys(files || {});
+        const normalizedCurrent = this.normalizeProjectPath(currentFile);
+        const folded = new Map();
+        for (const name of names) {
+            const normalized = this.normalizeProjectPath(name);
+            const key = String(normalized || '').toLocaleLowerCase();
+            if (!key) continue;
+            if (folded.has(key) && folded.get(key) !== normalized && normalized === normalizedCurrent) {
+                issues.push(this.makeIssue(1, "Project contains paths that differ only by letter case: '" + folded.get(key) + "' and '" + normalized + "'.", "Rename one path; this often works on one operating system and fails on another.", 'Project portability', 'warning'));
+            } else folded.set(key, normalized);
+        }
+        if (lang !== 'Javascript' && lang !== 'TypeScript') return issues;
+        const graph = new Map();
+        const importRe = /\b(?:import|export)\s+(?:[^'";]+?\s+from\s+)?["'](\.\.?\/[^"']+)["']|\brequire\s*\(\s*["'](\.\.?\/[^"']+)["']\s*\)/g;
+        for (const file of names) {
+            const deps = new Set(); const code = files[file] || ''; let match;
+            importRe.lastIndex = 0;
+            while ((match = importRe.exec(code)) !== null) {
+                const resolved = this.resolveProjectPath(match[1] || match[2], file);
+                if (resolved && this.projectHasPath(files, resolved, 'module')) {
+                    const direct = names.find(n => this.normalizeProjectPath(n) === resolved) || names.find(n => this.normalizeProjectPath(n).replace(/\.[^.]+$/, '') === resolved);
+                    if (direct) deps.add(direct);
+                }
+            }
+            graph.set(file, deps);
+        }
+        const visiting = new Set(), visited = new Set(), stack = [];
+        const visit = file => {
+            if (visiting.has(file)) return stack.slice(stack.indexOf(file)).concat(file);
+            if (visited.has(file)) return null;
+            visiting.add(file); stack.push(file);
+            for (const dep of graph.get(file) || []) { const cycle = visit(dep); if (cycle) return cycle; }
+            stack.pop(); visiting.delete(file); visited.add(file); return null;
+        };
+        const cycle = visit(currentFile);
+        if (cycle) issues.push(this.makeIssue(1, "Circular local module dependency: " + cycle.join(' → ') + ".", "Move shared code into a third module or invert one dependency; cyclic initialization can produce undefined exports.", 'Module dependency', 'info'));
         return issues;
     }
 

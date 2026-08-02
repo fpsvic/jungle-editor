@@ -14,7 +14,7 @@ class JungleScanner {
         // Universal cross-language checks
         issues.push(...this.scanUniversalAdvanced(lang, lines));
         issues.push(...this.scanLanguageGuardrails(lang, lines));
-        return this.finalizeIssues(issues, lang);
+        return this.finalizeIssues(issues, lang, lines.length);
     }
     // Async chunked scan — processes 200 lines at a time, yielding between chunks
     // Falls back to sync scan() for files under 500 lines
@@ -22,7 +22,13 @@ class JungleScanner {
         // Tree-sitter provides authoritative syntax structure. The legacy rules
         // remain a no-network fallback and continue to supply style/security hints.
         if (typeof JungleAstScanner !== 'undefined' && JungleAstScanner.names[lang]) {
-            return JungleAstScanner.scan(lang, code).catch(() => this.scan(lang, code));
+            // Keep parser diagnostics *and* the carefully masked heuristic checks.  The
+            // AST used to replace the rule scan here, which silently hid security and
+            // project-quality findings whenever Tree-sitter was available.
+            return Promise.all([
+                JungleAstScanner.scan(lang, code).catch(() => []),
+                Promise.resolve(this.scan(lang, code))
+            ]).then(([astIssues, ruleIssues]) => this.finalizeIssues([...astIssues, ...ruleIssues], lang, code.split('\n').length));
         }
         const lines = code.split('\n');
         if (lines.length <= 500) {
@@ -58,7 +64,7 @@ class JungleScanner {
                     if (lang === 'CSS') issues.push(...this.scanCssPatterns(lines), ...this.scanCssAdvanced(lines));
                     issues.push(...this.scanUniversalAdvanced(lang, lines));
                     issues.push(...this.scanLanguageGuardrails(lang, lines));
-                    resolve(this.finalizeIssues(issues, lang));
+                    resolve(this.finalizeIssues(issues, lang, lines.length));
                 }
             };
             setTimeout(processChunk, 0);
@@ -102,7 +108,7 @@ class JungleScanner {
     static makeIssue(line, msg, hint = "", kind = "Static analysis", column = null, severity = "error") {
         return { line, msg, hint, kind, column, severity };
     }
-    static finalizeIssues(issues, lang = null) {
+    static finalizeIssues(issues, lang = null, lineCount = null) {
         const seen = new Set();
         // Only high-confidence syntax/structure findings should block execution. The
         // scanner also reports style, security, performance, accessibility, and semantic
@@ -117,6 +123,9 @@ class JungleScanner {
             return issue;
         });
         const unique = normalized.filter(issue => {
+            // A diagnostic must refer to a real source line.  Some heuristic rules
+            // inspect look-ahead state; never expose a synthetic/out-of-file line.
+            if (lineCount !== null && Number.isFinite(Number(issue.line)) && (Number(issue.line) < 1 || Number(issue.line) > lineCount)) return false;
             const key = `${issue.line ?? 0}|${issue.column ?? 0}|${issue.kind ?? ''}|${issue.msg ?? ''}`;
             if (seen.has(key)) return false;
             seen.add(key);
@@ -248,6 +257,8 @@ class JungleScanner {
         let inHaskellBlockComment = 0; // nesting depth — Haskell {- -} comments nest
         let inNestedComment = 0;       // nesting depth — Nim #[ ]# and Julia #= =# comments nest
         let nestedOpen = null, nestedClose = null; // the 2-char open/close tokens for the active nested comment
+        let luaLongClose = null;    // Lua long-bracket ]==] closer while inside [[..]] / --[[..]]
+        let luaLongStart = null;    // where the current Lua long string/comment opened
         let inString = null;
         let inTriple = null; // '"""' or "'''" — persists across lines, unlike single-char strings
         let inRegex = false;
@@ -263,10 +274,13 @@ class JungleScanner {
             for (let j = 0; j < line.length; j++) {
                 const char = line[j];
                 const next = line[j + 1];
-                // Rust lifetime annotations ('a, 'static, <'a>) and Haskell's prime-suffix
-                // identifier convention (x', map') look like an unclosed char literal — a real
-                // char literal always closes right after one character (or escape); these never do.
-                if ((lang === 'Rust' || lang === 'Haskell') && char === "'" && !inString && !inTriple && !inRegex && !blockCommentCloser && !inHaskellBlockComment) {
+                // Rust/OCaml/F# type & lifetime variables ('a, 'static, <'a>) and Haskell's
+                // prime-suffix identifier convention (x', map') look like an unclosed char
+                // literal — a real char literal always closes right after one character (or
+                // escape); these never do. A genuine char literal ('c', '\n') still falls
+                // through to string handling because the char is immediately followed by "'".
+                const primeIdentLang = lang === 'Rust' || lang === 'Haskell' || lang === 'OCaml' || lang === 'F#';
+                if (primeIdentLang && char === "'" && !inString && !inTriple && !inRegex && !blockCommentCloser && !inHaskellBlockComment && !inNestedComment) {
                     const prevChar = line[j - 1];
                     if (lang === 'Haskell' && prevChar && /[A-Za-z0-9_']/.test(prevChar)) {
                         // trailing prime on an identifier (x', map'') — just a normal character
@@ -303,6 +317,11 @@ class JungleScanner {
                 if (inNestedComment) {
                     if (line.slice(j, j + 2) === nestedOpen) { inNestedComment++; j++; }
                     else if (line.slice(j, j + 2) === nestedClose) { inNestedComment--; j++; }
+                    continue;
+                }
+                if (luaLongClose) {
+                    // Lua long strings/comments are opaque and don't nest; scan only for the closer.
+                    if (line.slice(j, j + luaLongClose.length) === luaLongClose) { j += luaLongClose.length - 1; luaLongClose = null; luaLongStart = null; }
                     continue;
                 }
                 if (blockCommentCloser) {
@@ -347,6 +366,24 @@ class JungleScanner {
                 if (lang === 'Julia' && line.slice(j, j + 2) === '#=') {
                     inNestedComment = 1; nestedOpen = '#='; nestedClose = '=#';
                     blockCommentStart = { line: lineNum, column: j + 1 }; j++; continue;
+                }
+                if (lang === 'Lua') {
+                    // Long-bracket forms: [[ ]] and [=[ ]=] (strings) and --[[ ]] (comments).
+                    // All are opaque multi-line spans. The comment form always applies; the bare
+                    // string form is only treated as such in value position so ordinary nested
+                    // indexing like a[b[c]] is never misread as a long string.
+                    const luaOpen = line.slice(j).match(/^(--)?\[(=*)\[/);
+                    if (luaOpen) {
+                        const isComment = !!luaOpen[1];
+                        const wordBefore = (line.slice(0, j).match(/([A-Za-z_]\w*)\s*$/) || [])[1] || '';
+                        const valuePos = regexPreChars.has(lastSig) || /^(return|and|or|not|do|then|else|elseif|until|in)$/.test(wordBefore);
+                        if (isComment || valuePos) {
+                            luaLongClose = ']' + '='.repeat(luaOpen[2].length) + ']';
+                            luaLongStart = { line: lineNum, column: j + 1 };
+                            j += luaOpen[0].length - 1;
+                            continue;
+                        }
+                    }
                 }
                 if (dashCommentLangs.has(lang) && line.slice(j, j + 2) === '--') break;
                 if (asteriskGtCommentLangs.has(lang) && line.slice(j, j + 2) === '*>') break;
@@ -410,6 +447,9 @@ class JungleScanner {
         }
         if (inTriple && tripleStart) {
             errors.push(this.makeIssue(tripleStart.line, `Unclosed triple-quoted string starting with ${inTriple}.`, `Add a closing ${inTriple}.`, "String check", tripleStart.column));
+        }
+        if (luaLongClose && luaLongStart) {
+            errors.push(this.makeIssue(luaLongStart.line, "Unclosed Lua long-bracket string or comment.", `Add ${luaLongClose} to close the long bracket opened here.`, "String check", luaLongStart.column));
         }
         if (inString && stringStart) {
             errors.push(this.makeIssue(stringStart.line, `Unclosed string literal starting with ${inString}.`, `Add a closing ${inString}.`, "String check", stringStart.column));
@@ -685,14 +725,93 @@ class JungleScanner {
         return issues;
     }
 
+    // Returns a copy of `lines` with the contents of strings, char literals, comments,
+    // heredocs and other opaque spans replaced by spaces (length and structure preserved).
+    // Brackets, operators, identifiers and keywords survive, so per-line keyword checks can
+    // match real code without firing on words that merely appear inside a string or comment.
+    // This is the multi-language generalisation of maskJavaScriptTypeScript().
+    static maskCode(lang, lines) {
+        const hashCommentLangs = new Set(['Python', 'Ruby', 'Bash', 'Perl', 'R', 'Nix', 'Julia', 'Elixir', 'HCL', 'GDScript', 'Nim']);
+        const percentCommentLangs = new Set(['Erlang', 'Prolog']);
+        const semicolonCommentLangs = new Set(['Lisp', 'Clojure', 'Assembly']);
+        const dashCommentLangs = new Set(['Haskell', 'Lua', 'SQL']);
+        const bangCommentLangs = new Set(['Fortran']);
+        const asteriskGtCommentLangs = new Set(['COBOL']);
+        const parenStarBlockLangs = new Set(['OCaml', 'F#', 'Pascal']);
+        const noSingleQuoteStringLangs = new Set(['Lisp', 'Clojure']);
+        const primeIdentLang = lang === 'Rust' || lang === 'Haskell' || lang === 'OCaml' || lang === 'F#';
+        // '//' is a line comment only in languages that don't reserve it for something else
+        // (Python/Julia use it for division; Nim rejects it; hash/percent/etc. langs never use it).
+        const slashComment = !hashCommentLangs.has(lang) && !percentCommentLangs.has(lang)
+            && !semicolonCommentLangs.has(lang) && !dashCommentLangs.has(lang) && !bangCommentLangs.has(lang);
+        const heredocSkip = this.computeHeredocSkip(lines);
+        const podSkip = this.computePodSkip(lines, lang);
+        const blank = n => ' '.repeat(n);
+        const out = new Array(lines.length);
+        let blockCloser = null, haskellDepth = 0, nestedDepth = 0, nestedOpen = null, nestedClose = null;
+        let luaClose = null, inString = null, inTriple = null;
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (heredocSkip[i] || podSkip[i]) { out[i] = blank(line.length); continue; }
+            let res = '';
+            for (let j = 0; j < line.length; j++) {
+                const ch = line[j], next = line[j + 1];
+                if (inTriple) { if (line.slice(j, j + 3) === inTriple) { res += '   '; inTriple = null; j += 2; } else res += ' '; continue; }
+                if (haskellDepth) { if (line.slice(j, j + 2) === '{-') { haskellDepth++; res += '  '; j++; } else if (line.slice(j, j + 2) === '-}') { haskellDepth--; res += '  '; j++; } else res += ' '; continue; }
+                if (nestedDepth) { if (line.slice(j, j + 2) === nestedOpen) { nestedDepth++; res += '  '; j++; } else if (line.slice(j, j + 2) === nestedClose) { nestedDepth--; res += '  '; j++; } else res += ' '; continue; }
+                if (luaClose) { if (line.slice(j, j + luaClose.length) === luaClose) { res += blank(luaClose.length); j += luaClose.length - 1; luaClose = null; } else res += ' '; continue; }
+                if (blockCloser) { if (line.slice(j, j + blockCloser.length) === blockCloser) { res += blank(blockCloser.length); j += blockCloser.length - 1; blockCloser = null; } else res += ' '; continue; }
+                if (inString) {
+                    if (lang === 'SQL' && (inString === "'" || inString === '"') && ch === inString && next === inString) { res += '  '; j++; continue; }
+                    if (ch === inString && !this.isEscaped(line, j)) { res += ' '; inString = null; } else res += ' ';
+                    continue;
+                }
+                if (primeIdentLang && ch === "'") {
+                    const prev = line[j - 1];
+                    if (lang === 'Haskell' && prev && /[A-Za-z0-9_']/.test(prev)) { res += ch; continue; }
+                    const m = line.slice(j + 1).match(/^[A-Za-z_]\w*/);
+                    if (m && line[j + 1 + m[0].length] !== "'") { res += ch; continue; }
+                }
+                if (noSingleQuoteStringLangs.has(lang) && ch === "'") { res += ch; continue; }
+                if (lang === 'Pascal' && ch === '{') { blockCloser = '}'; res += ' '; continue; }
+                if (parenStarBlockLangs.has(lang) && ch === '(' && next === '*') { blockCloser = '*)'; res += '  '; j++; continue; }
+                if (lang === 'Haskell' && line.slice(j, j + 2) === '{-') { haskellDepth = 1; res += '  '; j++; continue; }
+                if (lang === 'Nim' && line.slice(j, j + 2) === '#[') { nestedDepth = 1; nestedOpen = '#['; nestedClose = ']#'; res += '  '; j++; continue; }
+                if (lang === 'Julia' && line.slice(j, j + 2) === '#=') { nestedDepth = 1; nestedOpen = '#='; nestedClose = '=#'; res += '  '; j++; continue; }
+                if (lang === 'Lua') { const m = line.slice(j).match(/^(--)?\[(=*)\[/); if (m) { luaClose = ']' + '='.repeat(m[2].length) + ']'; res += blank(m[0].length); j += m[0].length - 1; continue; } }
+                if (dashCommentLangs.has(lang) && line.slice(j, j + 2) === '--') { res += blank(line.length - j); break; }
+                if (asteriskGtCommentLangs.has(lang) && line.slice(j, j + 2) === '*>') { res += blank(line.length - j); break; }
+                if (hashCommentLangs.has(lang) && ch === '#') { res += blank(line.length - j); break; }
+                if (percentCommentLangs.has(lang) && ch === '%') { res += blank(line.length - j); break; }
+                if (semicolonCommentLangs.has(lang) && ch === ';') { res += blank(line.length - j); break; }
+                if (bangCommentLangs.has(lang) && ch === '!') { res += blank(line.length - j); break; }
+                if (lang === 'HTML' && line.slice(j, j + 4) === '<!--') { blockCloser = '-->'; res += '    '; j += 3; continue; }
+                if (slashComment && ch === '/' && next === '/') { res += blank(line.length - j); break; }
+                if (slashComment && ch === '/' && next === '*') { blockCloser = '*/'; res += '  '; j++; continue; }
+                if ((ch === '"' || ch === "'") && line.slice(j, j + 3) === ch.repeat(3)) { inTriple = ch.repeat(3); res += '   '; j += 2; continue; }
+                if (ch === '"' || ch === "'" || ch === '`') { inString = ch; res += ' '; continue; }
+                res += ch;
+            }
+            out[i] = res;
+        }
+        return out;
+    }
     static scanLanguagePatterns(lang, lines) {
         const issues = [];
+        const rawLines = lines;
+        const codeLines = this.maskCode(lang, lines);
         const fullCode = lines.join('\n');
+        const maskedFull = codeLines.join('\n');
         const e = (ln, msg, hint, kind, sev = "error") => issues.push(this.makeIssue(ln, msg, hint, kind, null, sev));
         const bracketDepths = this.computeBracketDepths(lines);
         const nextNonBlank = (idx) => this.nextNonBlankTrimmed(lines, idx);
-        lines.forEach((line, idx) => {
+        // `line`/`trimmed` are string/comment-masked so keyword checks don't fire on text
+        // inside strings or comments. `rawLine`/`rawTrimmed` keep the original text for the
+        // few checks that must inspect the actual quotes or string contents.
+        codeLines.forEach((line, idx) => {
             const lineNum = idx + 1;
+            const rawLine = rawLines[idx];
+            const rawTrimmed = rawLine.trim();
             const trimmed = line.trim();
             // '//' is a line comment in most languages, but NOT in Nim (which uses '#'),
             // so for Nim we let '//'-lines fall through to be flagged below.
@@ -705,7 +824,7 @@ class JungleScanner {
                 if (!insideBrackets && /^(if|elif|else|for|while|def|class|try|except|finally|with)\b/.test(trimmed) && !trimmed.endsWith(':') && !trimmed.endsWith('\\') && !trimmed.includes('#')) {
                     e(lineNum, "Python block statement is missing a trailing colon.", "Add ':' at the end of the line.", "Python syntax");
                 }
-                if (/^print\s+[^(\s]/.test(trimmed)) {
+                if (/^print\s+[^(\s]/.test(rawTrimmed)) {
                     e(lineNum, "print statement is missing parentheses (Python 3).", "Use print(...) with parentheses.", "Python syntax");
                 }
                 // Assignment '=' in an if/elif/while condition is a SyntaxError (':=' walrus is fine).
@@ -820,7 +939,7 @@ class JungleScanner {
                     }
                 }
                 // f-string with no {} interpolation — prefix is pointless
-                if (/\bf["']/.test(trimmed) && !/\{/.test(trimmed.replace(/\\{/g, ''))) {
+                if (/\bf["']/.test(rawTrimmed) && !/\{/.test(rawTrimmed.replace(/\\{/g, ''))) {
                     e(lineNum, "f-string has no {} placeholders — the 'f' prefix does nothing here.", "Remove the 'f' prefix or add a {variable} placeholder inside the string.", "Python style", "info");
                 }
                 // 'is' used for value equality (not None/True/False)
@@ -833,7 +952,7 @@ class JungleScanner {
                     e(lineNum, "Possible assignment '=' inside a condition — did you mean '==='?", "Use '===' for comparison, or wrap '(x = val)' in extra parens if intentional.", "JavaScript logic", "warning");
                 }
                 // Invalid typeof comparison string — a typo makes the check always false
-                const _typeofM = trimmed.match(/\btypeof\s+[\w.$[\]'"]+\s*[=!]==?\s*["']([^"']*)["']/);
+                const _typeofM = rawTrimmed.match(/\btypeof\s+[\w.$[\]'"]+\s*[=!]==?\s*["']([^"']*)["']/);
                 if (_typeofM) {
                     const validTypeof = ['undefined', 'object', 'boolean', 'number', 'bigint', 'string', 'symbol', 'function'];
                     if (!validTypeof.includes(_typeofM[1])) {
@@ -876,7 +995,7 @@ class JungleScanner {
                     e(lineNum, "console.log() debug statement left in code.", "Remove or replace with a proper logging solution before shipping.", "JavaScript debug", "info");
                 }
                 // typeof x == "undefined"
-                if (/\btypeof\s+\w[\w.]*\s*==\s*["']undefined["']/.test(trimmed)) {
+                if (/\btypeof\s+\w[\w.]*\s*==\s*["']undefined["']/.test(rawTrimmed)) {
                     e(lineNum, "typeof x == \"undefined\" is unnecessary.", "Use `x === undefined` for a cleaner check.", "JavaScript style", "info");
                 }
                 // Empty catch block
@@ -1004,7 +1123,7 @@ class JungleScanner {
                     }
                 }
                 // setTimeout/setInterval with a string argument (behaves like eval)
-                if (/\b(setTimeout|setInterval)\s*\(\s*["']/.test(trimmed)) {
+                if (/\b(setTimeout|setInterval)\s*\(\s*["']/.test(rawTrimmed)) {
                     e(lineNum, "setTimeout/setInterval with a string argument runs code like eval().", "Pass an arrow function instead: setTimeout(() => { ... }, delay).", "JavaScript security", "warning");
                 }
                 // Nested ternary operators (two or more ? in one line)
@@ -1027,12 +1146,12 @@ class JungleScanner {
                 if (/public\s+class\s+[A-Za-z_]\w*/.test(trimmed) && !/[{;]/.test(trimmed) && !/^(extends|implements)\b/.test(nextNonBlank(idx))) {
                     e(lineNum, "Java class declaration is missing an opening brace.", "Add '{' after the class name.", "Java syntax");
                 }
-                if (/System\.out\.print(?:ln)?\s+["']/.test(trimmed)) {
+                if (/System\.out\.print(?:ln)?\s+["']/.test(rawTrimmed)) {
                     e(lineNum, "Java print call is missing parentheses.", "Use System.out.println(...).", "Java syntax");
                 }
                 // String comparison with '==' — a string literal on either side means one operand
                 // is a String, so '==' compares references. Double-quotes only: 'char == \\'x\\'' is valid.
-                if (/[\w)\]]\s*==\s*"/.test(trimmed) || /"\s*==\s*[\w("]/.test(trimmed)) {
+                if (/[\w)\]]\s*==\s*"/.test(rawTrimmed) || /"\s*==\s*[\w("]/.test(rawTrimmed)) {
                     e(lineNum, "String comparison with '==' compares references, not content.", "Use .equals() or .equalsIgnoreCase() to compare String values.", "Java logic", "warning");
                 }
                 if (/\bcatch\s*\(\s*Exception\s+\w+\s*\)/.test(trimmed)) {
@@ -1051,13 +1170,13 @@ class JungleScanner {
                 if (/\bscanf\s*\(\s*["'][^"']*["']\s*,\s*[^&]/.test(trimmed)) {
                     e(lineNum, "scanf argument may be missing '&' address-of operator.", "Pass the address of the variable: scanf(\"%d\", &var).", "C/C++ syntax");
                 }
-                if (/\bmalloc\s*\(/.test(trimmed) && !/\bfree\s*\(/.test(fullCode)) {
+                if (/\bmalloc\s*\(/.test(trimmed) && !/\bfree\s*\(/.test(maskedFull)) {
                     e(lineNum, "malloc() called but no matching free() found in the file.", "Always free() every malloc() allocation to prevent memory leaks.", "C/C++ memory", "warning");
                 }
                 if (lang === 'C++' && /\bgets\s*\(/.test(trimmed)) {
                     e(lineNum, "gets() is unsafe and removed in C11.", "Use fgets(buf, size, stdin) instead.", "C/C++ security", "warning");
                 }
-                if (lang === 'C++' && /\bnew\b/.test(trimmed) && !/\bdelete\b/.test(fullCode)) {
+                if (lang === 'C++' && /\bnew\b/.test(trimmed) && !/\bdelete\b/.test(maskedFull)) {
                     e(lineNum, "'new' used but no 'delete' found — possible memory leak.", "Match every 'new' with a 'delete' or use smart pointers (unique_ptr).", "C++ memory", "warning");
                 }
             } else if (lang === 'Go') {
@@ -1070,7 +1189,7 @@ class JungleScanner {
                         e(lineNum, "Go function signature appears incomplete.", "Close the parameter list with ')' and add the opening brace.", "Go syntax");
                     }
                 }
-                if (/fmt\.Print(?:ln|f)?\s+["']/.test(trimmed)) {
+                if (/fmt\.Print(?:ln|f)?\s+["']/.test(rawTrimmed)) {
                     e(lineNum, "Go print call is missing parentheses.", "Use fmt.Println(...).", "Go syntax");
                 }
                 if (/\b:=\b/.test(trimmed) && /^\s*(if|for|switch)\b/.test(line)) {
@@ -1241,7 +1360,7 @@ class JungleScanner {
                 if (/\bcount\s*=\s*\d/.test(trimmed) && /\bfor_each\b/.test(fullCode)) {
                     e(lineNum, "Mixing 'count' and 'for_each' in the same configuration can cause index drift.", "Use one meta-argument consistently per resource.", "HCL style", "warning");
                 }
-                if (/\bhardcoded\b|password\s*=\s*"[^"]{3,}"|secret\s*=\s*"[^"]{3,}"/i.test(trimmed)) {
+                if (/\bhardcoded\b|password\s*=\s*"[^"]{3,}"|secret\s*=\s*"[^"]{3,}"/i.test(rawTrimmed)) {
                     e(lineNum, "Hardcoded secret or password detected in HCL.", "Use a variable or a secrets manager reference instead of a literal value.", "HCL security", "error");
                 }
                 if (/\baws_access_key\b|\baws_secret_key\b/.test(trimmed)) {
@@ -1401,10 +1520,13 @@ class JungleScanner {
     static scanLanguageGuardrails(lang, lines) {
         const issues = [];
         const e = (line, msg, hint, kind, severity = 'warning') => issues.push(this.makeIssue(line, msg, hint, kind, null, severity));
-        const code = lines.join('\n');
+        // Guardrails only look for code tokens (risky calls, operators). Run them over
+        // string/comment-masked text so a keyword inside a string or comment isn't flagged.
+        const maskedLines = this.maskCode(lang, lines);
+        const code = maskedLines.join('\n');
         const cLike = ['C', 'C++', 'C#', 'Java', 'Go', 'D', 'Kotlin', 'Swift', 'Dart', 'PHP', 'Groovy'];
         if (cLike.includes(lang)) {
-            lines.forEach((raw, index) => {
+            maskedLines.forEach((raw, index) => {
                 const line = raw.trim();
                 if (!line || line.startsWith('//') || line.startsWith('#')) return;
                 const condition = line.match(/\b(?:if|while)\s*\(([^()]*)\)/);
@@ -1416,14 +1538,43 @@ class JungleScanner {
                 }
             });
         }
+        if (lang === 'Javascript' || lang === 'TypeScript') {
+            maskedLines.forEach((raw, index) => {
+                if (/\b(?:setTimeout|setInterval)\s*\(\s*['"]/.test(raw)) e(index + 1, "String-based timer execution is hard to refactor and can execute injected code.", "Pass a function to setTimeout/setInterval instead of a string.", lang + ' safety', 'warning');
+                if (/\bJSON\.parse\s*\(/.test(raw) && !/\b(?:try|catch)\b/.test(code)) e(index + 1, "JSON.parse can throw on malformed input.", "Validate the source or wrap parsing in try/catch when input is not guaranteed.", lang + ' error handling', 'info');
+                if (/\b(?:==|!=)(?!=)/.test(raw) && !/\b(?:null|undefined)\b/.test(raw)) e(index + 1, "Loose equality can coerce values unexpectedly.", "Use === or !== unless coercion is intentional.", lang + ' logic', 'info');
+            });
+        }
+        if (lang === 'Python') {
+            maskedLines.forEach((raw, index) => {
+                if (/^\s*except\s*:\s*(?:pass)?\s*$/.test(raw)) e(index + 1, "Bare exception handler can hide unrelated failures.", "Catch the expected exception type and handle or report it.", 'Python error handling', 'warning');
+                if (/\bsubprocess\.(?:call|run|Popen)\s*\([^\n]*shell\s*=\s*True/.test(raw)) e(index + 1, "subprocess with shell=True can interpret untrusted input as commands.", "Pass an argument list with shell=False unless a shell is strictly required.", 'Python security', 'warning');
+            });
+        }
+        if (lang === 'Go') {
+            maskedLines.forEach((raw, index) => {
+                if (/\b(?:err|error)\s*:=/.test(raw) && !/\bif\s+err\s*!=\s*nil\b/.test(lines.slice(index, Math.min(index + 4, lines.length)).join('\n'))) e(index + 1, "Error result may be ignored.", "Check err promptly or deliberately document why it is safe to ignore.", 'Go error handling', 'info');
+            });
+        }
+        if (lang === 'PHP') {
+            maskedLines.forEach((raw, index) => {
+                if (/\b(?:mysqli_query|->query)\s*\([^\n]*\$/.test(raw)) e(index + 1, "SQL query appears to interpolate a variable.", "Use prepared statements and bound parameters for external values.", 'PHP security', 'warning');
+                if (/\bunserialize\s*\(/.test(raw)) e(index + 1, "unserialize() on untrusted data can instantiate attacker-controlled objects.", "Prefer JSON for external data, or strictly validate a trusted serialized payload.", 'PHP security', 'warning');
+            });
+        }
+        if (lang === 'Java' || lang === 'C#') {
+            maskedLines.forEach((raw, index) => {
+                if (/\bcatch\s*\(\s*(?:Exception|Throwable|System\.Exception)\b[^)]*\)\s*\{?\s*\}?/.test(raw)) e(index + 1, "Broad exception catch can conceal programming errors.", "Catch the narrowest expected exception and preserve useful failure context.", lang + ' error handling', 'info');
+            });
+        }
         if (lang === 'C' || lang === 'C++') {
-            lines.forEach((raw, index) => {
+            maskedLines.forEach((raw, index) => {
                 if (/\b(?:strcpy|strcat|sprintf)\s*\(/.test(raw)) e(index + 1, "Unbounded C string function can overflow its destination.", "Use a bounded alternative such as snprintf or a size-aware string API.", lang + ' security', 'warning');
                 if (/\bscanf\s*\([^\n]*%s(?!\d)/.test(raw)) e(index + 1, "scanf %s has no width limit and can overflow the buffer.", "Add a maximum field width or use fgets with explicit validation.", 'C input safety', 'warning');
             });
         }
         if (lang === 'Bash') {
-            lines.forEach((raw, index) => {
+            maskedLines.forEach((raw, index) => {
                 if (/\b(?:rm|cp|mv|chmod|chown|mkdir|cat|grep|source)\b[^\n]*\$[A-Za-z_][\w]*/.test(raw) && !/"[^"\n]*\$[A-Za-z_]/.test(raw) && !/'[^'\n]*\$[A-Za-z_]/.test(raw)) {
                     e(index + 1, "Shell variable is unquoted in a file/path command.", "Quote expansions such as \"$file\" to preserve spaces and prevent wildcard expansion.", 'Bash safety', 'warning');
                 }
@@ -1433,997 +1584,41 @@ class JungleScanner {
             });
         }
         if (lang === 'Rust') {
-            lines.forEach((raw, index) => { if (/\.(?:unwrap|expect)\s*\(/.test(raw)) e(index + 1, "Fallible result is force-unwrapped and can panic.", "Handle the Result or Option explicitly when failure is possible.", 'Rust error handling', 'info'); });
+            maskedLines.forEach((raw, index) => { if (/\.(?:unwrap|expect)\s*\(/.test(raw)) e(index + 1, "Fallible result is force-unwrapped and can panic.", "Handle the Result or Option explicitly when failure is possible.", 'Rust error handling', 'info'); });
         }
         if (lang === 'Kotlin') {
-            lines.forEach((raw, index) => { if (/\w!\W/.test(raw) && !/!=/.test(raw)) e(index + 1, "Non-null assertion can throw when the value is null.", "Prefer safe calls (?.), let, or an explicit null check.", 'Kotlin null safety', 'info'); });
+            maskedLines.forEach((raw, index) => { if (/\w!\W/.test(raw) && !/!=/.test(raw)) e(index + 1, "Non-null assertion can throw when the value is null.", "Prefer safe calls (?.), let, or an explicit null check.", 'Kotlin null safety', 'info'); });
         }
         if (lang === 'Swift') {
-            lines.forEach((raw, index) => { if (/\b[A-Za-z_]\w*!\s*(?:\.|\[|$)/.test(raw) && !/!=/.test(raw)) e(index + 1, "Force unwrap can crash when the value is nil.", "Use optional binding, ??, or optional chaining instead.", 'Swift safety', 'info'); });
+            maskedLines.forEach((raw, index) => { if (/\b[A-Za-z_]\w*!\s*(?:\.|\[|$)/.test(raw) && !/!=/.test(raw)) e(index + 1, "Force unwrap can crash when the value is nil.", "Use optional binding, ??, or optional chaining instead.", 'Swift safety', 'info'); });
         }
         if (lang === 'Scala' || lang === 'Java') {
-            lines.forEach((raw, index) => { if (/\b(?:Option|Optional)\s*<[^>]+>[^\n]*\.get\s*\(/.test(raw)) e(index + 1, "Optional value is accessed with get() and may be empty.", "Use a safe fallback, map/flatMap, or explicit presence check.", lang + ' null safety', 'info'); });
+            maskedLines.forEach((raw, index) => { if (/\b(?:Option|Optional)\s*<[^>]+>[^\n]*\.get\s*\(/.test(raw)) e(index + 1, "Optional value is accessed with get() and may be empty.", "Use a safe fallback, map/flatMap, or explicit presence check.", lang + ' null safety', 'info'); });
         }
         if (lang === 'Lua') {
-            lines.forEach((raw, index) => { if (/\b(?:loadstring|load)\s*\(/.test(raw)) e(index + 1, "Dynamic Lua code loading can execute untrusted input.", "Avoid dynamic loading or validate the source before executing it.", 'Lua security', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\b(?:loadstring|load)\s*\(/.test(raw)) e(index + 1, "Dynamic Lua code loading can execute untrusted input.", "Avoid dynamic loading or validate the source before executing it.", 'Lua security', 'warning'); });
         }
         if (lang === 'Elixir') {
-            lines.forEach((raw, index) => { if (/\bString\.to_atom\s*\(/.test(raw)) e(index + 1, "Converting untrusted strings to atoms can exhaust the VM atom table.", "Use String.to_existing_atom only for controlled values, or keep the value as a string.", 'Elixir safety', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\bString\.to_atom\s*\(/.test(raw)) e(index + 1, "Converting untrusted strings to atoms can exhaust the VM atom table.", "Use String.to_existing_atom only for controlled values, or keep the value as a string.", 'Elixir safety', 'warning'); });
         }
         if (lang === 'Erlang') {
-            lines.forEach((raw, index) => { if (/\blist_to_atom\s*\(/.test(raw)) e(index + 1, "Creating atoms from untrusted lists can exhaust the Erlang VM atom table.", "Use binaries or existing-atom conversion for external input.", 'Erlang safety', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\blist_to_atom\s*\(/.test(raw)) e(index + 1, "Creating atoms from untrusted lists can exhaust the Erlang VM atom table.", "Use binaries or existing-atom conversion for external input.", 'Erlang safety', 'warning'); });
         }
         if (lang === 'Perl') {
-            lines.forEach((raw, index) => { if (/`[^`]+`/.test(raw) || /\bsystem\s*\(/.test(raw)) e(index + 1, "Shell command execution is present.", "Keep arguments separated and validated; never concatenate untrusted input into a shell command.", 'Perl security', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/`[^`]+`/.test(raw) || /\bsystem\s*\(/.test(raw)) e(index + 1, "Shell command execution is present.", "Keep arguments separated and validated; never concatenate untrusted input into a shell command.", 'Perl security', 'warning'); });
         }
         if (lang === 'Haskell') {
-            lines.forEach((raw, index) => { if (/\bunsafePerformIO\b/.test(raw)) e(index + 1, "unsafePerformIO breaks normal purity and evaluation guarantees.", "Keep IO in the IO type and pass values explicitly where possible.", 'Haskell safety', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\bunsafePerformIO\b/.test(raw)) e(index + 1, "unsafePerformIO breaks normal purity and evaluation guarantees.", "Keep IO in the IO type and pass values explicitly where possible.", 'Haskell safety', 'warning'); });
         }
         if (lang === 'Fortran' && /\b(?:program|module|subroutine|function)\b/i.test(code) && !/\bimplicit\s+none\b/i.test(code)) {
             e(1, "Fortran source has no IMPLICIT NONE declaration.", "Add IMPLICIT NONE to catch misspelled variables at compile time.", 'Fortran safety', 'info');
         }
         if (lang === 'Nim') {
-            lines.forEach((raw, index) => { if (/\bunsafeAddr\b/.test(raw)) e(index + 1, "unsafeAddr bypasses Nim's normal memory-safety checks.", "Use a safe reference or pointer operation unless the lifetime is guaranteed.", 'Nim safety', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\bunsafeAddr\b/.test(raw)) e(index + 1, "unsafeAddr bypasses Nim's normal memory-safety checks.", "Use a safe reference or pointer operation unless the lifetime is guaranteed.", 'Nim safety', 'warning'); });
         }
         if (lang === 'R') {
-            lines.forEach((raw, index) => { if (/\b1\s*:\s*length\s*\(/.test(raw)) e(index + 1, "1:length(x) becomes 1:0 when x is empty.", "Use seq_along(x) or seq_len(length(x)) for empty-safe iteration.", 'R logic', 'warning'); });
+            maskedLines.forEach((raw, index) => { if (/\b1\s*:\s*length\s*\(/.test(raw)) e(index + 1, "1:length(x) becomes 1:0 when x is empty.", "Use seq_along(x) or seq_len(length(x)) for empty-safe iteration.", 'R logic', 'warning'); });
         }
         return issues;
-    }
-
-    // Advanced HTML checks
-    static scanHtmlPatterns(lines) {
-        const issues = [];
-        const e = (ln, msg, hint, kind, col, sev) => issues.push(this.makeIssue(ln, msg, hint, kind, col ?? null, sev ?? "warning"));
-        const fullCode = lines.join('\n');
-        // Missing <!DOCTYPE html>
-        if (!/<!DOCTYPE\s+html>/i.test(fullCode)) {
-            e(1, "Missing <!DOCTYPE html> declaration.", "Add <!DOCTYPE html> as the very first line of the document.", "HTML best practice", null, "warning");
-        }
-        // Missing lang on <html> tag
-        if (/<html[\s>]/i.test(fullCode) && !/<html[^>]+lang\s*=/i.test(fullCode)) {
-            const htmlLine = lines.findIndex(l => /<html[\s>]/i.test(l));
-            e(htmlLine >= 0 ? htmlLine + 1 : 1, "<html> tag is missing a 'lang' attribute.", "Add lang=\"en\" (or appropriate language code) to <html> for accessibility and SEO.", "HTML accessibility", null, "warning");
-        }
-        // Duplicate id attributes
-        const idMatches = [...fullCode.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)];
-        const idSeen = new Map();
-        for (const m of idMatches) {
-            const idVal = m[1];
-            const beforeMatch = fullCode.slice(0, m.index);
-            const lineNum = beforeMatch.split('\n').length;
-            if (idSeen.has(idVal)) {
-                e(lineNum, `Duplicate id="${idVal}" found — id attributes must be unique in a document.`, "Change one of the duplicate ids to a unique value or use a class instead.", "HTML accessibility", null, "error");
-            } else {
-                idSeen.set(idVal, lineNum);
-            }
-        }
-        // Missing <title>
-        if (/<head[\s>]/i.test(fullCode) && !/<title[\s>]/i.test(fullCode)) {
-            e(1, "Document is missing a <title> tag.", "Add <title>Your Page Title</title> inside <head> for SEO and accessible browser tabs.", "HTML best practice", null, "warning");
-        }
-        // Missing <meta charset>
-        if (!/<meta[^>]+charset\s*=/i.test(fullCode)) {
-            e(1, "Document is missing a <meta charset> declaration.", "Add <meta charset=\"UTF-8\"> as the first element inside <head>.", "HTML best practice", null, "warning");
-        }
-        // Missing <meta name="viewport">
-        if (!/<meta[^>]+name\s*=\s*["']viewport["']/i.test(fullCode)) {
-            e(1, "Document is missing a viewport meta tag.", "Add <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"> for mobile responsiveness.", "HTML best practice", null, "info");
-        }
-        const deprecatedTags = ['center', 'font', 'marquee', 'blink'];
-        lines.forEach((line, idx) => {
-            const lineNum = idx + 1;
-            const lowerLine = line.toLowerCase();
-            // Missing alt on <img>
-            const imgMatches = [...line.matchAll(/<img\b([^>]*)>/gi)];
-            for (const m of imgMatches) {
-                if (!/\balt\s*=/i.test(m[1])) {
-                    e(lineNum, "<img> tag is missing an `alt` attribute.", "Add alt=\"description\" for accessibility.", "HTML accessibility", m.index + 1, "warning");
-                }
-            }
-            // Deprecated tags
-            for (const tag of deprecatedTags) {
-                const re = new RegExp(`<${tag}[\\s>]`, 'i');
-                if (re.test(line)) {
-                    e(lineNum, `<${tag}> is a deprecated HTML tag.`, `Remove <${tag}> and use CSS or modern HTML equivalents instead.`, "HTML deprecated", null, "warning");
-                }
-            }
-            // Inline style attribute (info)
-            if (/\bstyle\s*=\s*["'][^"']+["']/i.test(line)) {
-                e(lineNum, "Inline `style` attribute found.", "Move styles to a CSS class or stylesheet for maintainability.", "HTML style", null, "info");
-            }
-            // Empty <script> without src or type
-            if (/<script\s*>\s*<\/script>/i.test(line) || /<script>\s*<\/script>/i.test(line)) {
-                e(lineNum, "Empty <script> block with no src or content.", "Add a src attribute or add script content, or remove the tag.", "HTML quality", null, "info");
-            }
-            // NEW: <a href="#"> placeholder links
-            if (/<a\b[^>]*\bhref\s*=\s*["']#["'][^>]*>/i.test(line)) {
-                e(lineNum, "<a href=\"#\"> is a placeholder link with no real destination.", "Replace '#' with a real URL or use a <button> for click handlers.", "HTML quality", null, "info");
-            }
-            // NEW: <input> without type attribute
-            const inputMatches = [...line.matchAll(/<input\b([^>]*)>/gi)];
-            for (const m of inputMatches) {
-                if (!/\btype\s*=/i.test(m[1])) {
-                    e(lineNum, "<input> is missing a 'type' attribute — defaults to 'text' but is ambiguous.", "Add type=\"text\", type=\"email\", type=\"checkbox\", etc. to be explicit.", "HTML quality", null, "info");
-                }
-            }
-            // NEW: <form> without action or onsubmit
-            const formMatches = [...line.matchAll(/<form\b([^>]*)>/gi)];
-            for (const m of formMatches) {
-                if (!/\b(action|onsubmit)\s*=/i.test(m[1])) {
-                    e(lineNum, "<form> has no 'action' or 'onsubmit' — form submission may go nowhere.", "Add an action URL or onsubmit handler to process the form data.", "HTML quality", null, "info");
-                }
-            }
-            // <button> without type inside a <form> — outside a form, the default is harmless
-            const btnMatches = [...line.matchAll(/<button\b([^>]*)>/gi)];
-            const inForm = /<form[\s>]/i.test(fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0));
-            for (const m of btnMatches) {
-                if (!/\btype\s*=/i.test(m[1]) && inForm) {
-                    e(lineNum, "<button> missing a 'type' attribute inside a form — defaults to 'submit' and may submit unintentionally.", "Add type=\"button\" for action buttons or type=\"submit\" to be explicit.", "HTML quality", m.index + 1, "info");
-                }
-            }
-            // <script src> in <head> without defer or async (not at end of body where it's fine)
-            const extScriptMatches = [...line.matchAll(/<script\b([^>]*)>/gi)];
-            const inHead = /<head[\s>]/i.test(fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0) + line);
-            for (const m of extScriptMatches) {
-                if (/\bsrc\s*=/i.test(m[1]) && !/\bdefer\b|\basync\b/i.test(m[1]) && !/\btype\s*=\s*["']module["']/i.test(m[1])) {
-                    // Only flag if we're clearly still inside <head> — check that </head> hasn't appeared yet
-                    const beforeLine = fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0);
-                    if (!/<\/head>/i.test(beforeLine) && /<head[\s>]/i.test(beforeLine)) {
-                        e(lineNum, "<script src> in <head> without 'defer' or 'async' blocks HTML parsing until the script downloads.", "Add the 'defer' attribute to load the script after the document is parsed.", "HTML performance", m.index + 1, "info");
-                    }
-                }
-            }
-            // <label> without for attribute and not wrapping an input
-            const labelMatches = [...line.matchAll(/<label\b([^>]*)>/gi)];
-            for (const m of labelMatches) {
-                if (!/\bfor\s*=/i.test(m[1]) && !/\bhtmlfor\s*=/i.test(m[1])) {
-                    const labelContent = line.slice(m.index);
-                    if (!/<input\b/i.test(labelContent) && !/<select\b/i.test(labelContent) && !/<textarea\b/i.test(labelContent)) {
-                        e(lineNum, "<label> has no 'for' attribute linking it to an input.", "Add for=\"inputId\" matching the id of the associated input element.", "HTML accessibility", m.index + 1, "info");
-                    }
-                }
-            }
-        });
-        return issues;
-    }
-    // Additional HTML checks: broken references, duplicate attributes, unsafe URLs,
-    // document structure, and accessibility issues that are not visible from tag nesting alone.
-    static scanHtmlAdvanced(lines) {
-        const issues = [];
-        const code = lines.join('\n');
-        const e = (offset, msg, hint, kind, sev = 'warning') => {
-            const before = code.slice(0, Math.max(0, offset));
-            const line = before.split('\n').length;
-            const column = offset - before.lastIndexOf('\n');
-            issues.push(this.makeIssue(line, msg, hint, kind, column, sev));
-        };
-        const unquote = value => value == null ? '' : value.replace(/^["']|["']$/g, '');
-        const ids = new Map();
-        const references = [];
-        const tagRe = /<([A-Za-z][\w:-]*)(\s[^<>]*?)?\/?>/g;
-        const tagCounts = new Map();
-        let tagMatch;
-        while ((tagMatch = tagRe.exec(code)) !== null) {
-            const tagName = tagMatch[1].toLowerCase();
-            const attrs = tagMatch[2] || '';
-            const raw = tagMatch[0];
-            const tagOffset = tagMatch.index;
-            tagCounts.set(tagName, (tagCounts.get(tagName) || 0) + 1);
-            const entries = [];
-            const attrRe = /([:@A-Za-z_][\w:.-]*)(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>\x60]+))?/g;
-            let attrMatch;
-            while ((attrMatch = attrRe.exec(attrs)) !== null) {
-                const name = attrMatch[1].toLowerCase();
-                const valueMatch = attrMatch[0].match(/=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>\x60]+))/);
-                const value = valueMatch ? (valueMatch[1] ?? valueMatch[2] ?? valueMatch[3] ?? '') : null;
-                entries.push({ name, value, offset: tagOffset + raw.indexOf(attrs) + attrMatch.index });
-            }
-            const attrMap = new Map();
-            for (const entry of entries) {
-                if (!attrMap.has(entry.name)) attrMap.set(entry.name, []);
-                attrMap.get(entry.name).push(entry);
-            }
-            for (const [name, same] of attrMap) {
-                if (same.length > 1) {
-                    e(same[1].offset, "Duplicate '" + name + "' attribute on <" + tagName + ">.", "Keep only one " + name + " attribute; browsers use inconsistent duplicate-attribute recovery rules.", "HTML syntax", "error");
-                }
-            }
-            for (const entry of entries) {
-                if (entry.value !== null && /\s=\s*[^\s"'=<>\x60]+/.test(attrs.slice(entry.offset - (tagOffset + raw.indexOf(attrs))))) {
-                    e(entry.offset, "Unquoted value for '" + entry.name + "' attribute on <" + tagName + ">.", "Quote attribute values so spaces and special characters cannot change the parsed markup.", "HTML syntax", "warning");
-                }
-                if (entry.name === 'id') {
-                    if (!entry.value) e(entry.offset, "Empty id attribute on <" + tagName + ">.", "Give the element a non-empty id or remove the attribute.", "HTML accessibility", "warning");
-                    else if (ids.has(entry.value)) e(entry.offset, "Duplicate id=\"" + entry.value + "\" found.", "Every id must be unique in the document.", "HTML accessibility", "error");
-                    else ids.set(entry.value, tagOffset);
-                }
-                if (entry.name === 'for' || entry.name === 'aria-labelledby' || entry.name === 'aria-describedby' || entry.name === 'aria-controls') {
-                    for (const ref of unquote(entry.value).split(/\s+/).filter(Boolean)) references.push({ ref, offset: entry.offset, type: entry.name });
-                }
-                if (entry.name === 'href' || entry.name === 'src' || entry.name === 'action') {
-                    const value = unquote(entry.value);
-                    if (entry.value !== null && !value.trim()) e(entry.offset, "Empty " + entry.name + " attribute on <" + tagName + ">.", "Provide a real URL or remove the attribute.", "HTML link", "warning");
-                    if (/^javascript:/i.test(value)) e(entry.offset, "javascript: URL found in " + entry.name + ".", "Use a real URL or a button event handler instead of executable URL text.", "HTML security", "error");
-                }
-            }
-
-            const get = name => {
-                const found = attrMap.get(name);
-                return found && found[0] ? unquote(found[0].value) : null;
-            };
-            const has = name => attrMap.has(name);
-            if (tagName === 'img' && !has('src')) {
-                e(tagOffset, "<img> has no src attribute and will render as a broken image.", "Add a valid src or remove the image element.", "HTML resource", "warning");
-            }
-            if (tagName === 'a') {
-                const href = get('href');
-                if (href === null && get('role') !== 'button') e(tagOffset, "<a> has no href and is not marked as a button.", "Use <button> for an action or add a real href for navigation.", "HTML accessibility", "warning");
-                if (get('target') === '_blank' && !/\b(?:noopener|noreferrer)\b/i.test(get('rel') || '')) {
-                    e(tagOffset, "target=\"_blank\" link is missing rel=\"noopener\".", "Add rel=\"noopener noreferrer\" to prevent the opened page from accessing window.opener.", "HTML security", "warning");
-                }
-            }
-            if (tagName === 'iframe' && !has('title')) {
-                e(tagOffset, "<iframe> is missing a title.", "Add a concise title so screen-reader users know what the embedded content is.", "HTML accessibility", "warning");
-            }
-            if (tagName === 'script' && has('src')) {
-                const src = get('src');
-                if (!src) e(tagOffset, "<script src> is empty.", "Provide a script URL or remove the script tag.", "HTML resource", "error");
-                if (/^https:\/\//i.test(src || '') && !has('integrity')) {
-                    e(tagOffset, "Third-party script has no integrity attribute.", "Use Subresource Integrity where the remote provider supports it, or self-host the dependency.", "HTML security", "info");
-                }
-            }
-            if (tagName === 'link' && /\bstylesheet\b/i.test(get('rel') || '') && !has('href')) {
-                e(tagOffset, "Stylesheet link is missing href.", "Add the stylesheet URL or remove the link element.", "HTML resource", "error");
-            }
-            if (tagName === 'html' && get('lang') === '') {
-                e(tagOffset, "<html lang> is empty.", "Set lang to the document language, for example lang=\"en\".", "HTML accessibility", "warning");
-            }
-            if (tagName === 'input' && has('id') && !has('name') && !/\btype\s*=\s*["'](?:submit|button|reset|image)["']/i.test(raw)) {
-                e(tagOffset, "Form input has an id but no name.", "Add name if the control's value should be submitted with the form.", "HTML forms", "info");
-            }
-            if (/\bon[a-z]+\s*=/i.test(attrs)) {
-                e(tagOffset, "Inline event handler found on <" + tagName + ">.", "Prefer addEventListener in a script so behavior stays separate from markup.", "HTML maintainability", "info");
-            }
-        }
-
-        const firstContent = code.search(/\S/);
-        const doctypes = [...code.matchAll(/<!doctype\b/gi)];
-        if (doctypes.length > 1) e(doctypes[1].index, "Document contains multiple DOCTYPE declarations.", "Keep exactly one DOCTYPE at the beginning of the document.", "HTML structure", "error");
-        if (doctypes.length && firstContent >= 0 && doctypes[0].index !== firstContent) {
-            e(doctypes[0].index, "DOCTYPE must be the first non-whitespace content.", "Move <!DOCTYPE html> before comments and other markup.", "HTML structure", "warning");
-        }
-        if (tagCounts.has('html')) {
-            for (const tag of ['html', 'head', 'body']) {
-                if ((tagCounts.get(tag) || 0) > 1) {
-                    const second = code.toLowerCase().indexOf('<' + tag, code.toLowerCase().indexOf('<' + tag) + 1);
-                    e(second >= 0 ? second : code.toLowerCase().indexOf('<' + tag), "Document contains multiple <" + tag + "> elements.", "Use one document-level <" + tag + "> element.", "HTML structure", "error");
-                }
-            }
-            if (!tagCounts.has('head')) e(code.toLowerCase().indexOf('<html'), "Document with <html> is missing <head>.", "Add a <head> section for metadata and the document title.", "HTML structure", "warning");
-            if (!tagCounts.has('body')) e(code.toLowerCase().indexOf('<html'), "Document with <html> is missing <body>.", "Add a <body> section for visible content.", "HTML structure", "warning");
-        }
-        for (const ref of references) {
-            if (!ids.has(ref.ref)) {
-                e(ref.offset, "'" + ref.type + "=\"" + ref.ref + "\" references an id that does not exist.", "Add id=\"" + ref.ref + "\" to the target element or correct the reference.", "HTML accessibility", "warning");
-            }
-        }
-        return issues;
-    }
-
-    // Run the JS and CSS scanners inside inline HTML blocks and shift findings back to
-    // the original HTML line numbers.
-    static scanHtmlEmbeddedCode(lines) {
-        const issues = [];
-        const code = lines.join('\n');
-        const shift = (found, startLine) => found.map(issue => ({ ...issue, line: issue.line + startLine - 1 }));
-        const scriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
-        let match;
-        while ((match = scriptRe.exec(code)) !== null) {
-            const attrs = match[1] || '';
-            if (/\bsrc\s*=/i.test(attrs)) continue;
-            const type = (attrs.match(/\btype\s*=\s*["']([^"']+)["']/i) || [])[1] || '';
-            if (type && !/(?:javascript|ecmascript|module)/i.test(type)) continue;
-            const startLine = code.slice(0, match.index + match[0].indexOf('>') + 1).split('\n').length;
-            issues.push(...shift(this.scanJavaScriptTypeScript(match[2].split('\n'), 'Javascript'), startLine));
-        }
-        const styleRe = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
-        while ((match = styleRe.exec(code)) !== null) {
-            const startLine = code.slice(0, match.index + match[0].indexOf('>') + 1).split('\n').length;
-            const styleLines = match[1].split('\n');
-            issues.push(...shift([...this.scanCssPatterns(styleLines), ...this.scanCssAdvanced(styleLines)], startLine));
-        }
-        return issues;
-    }
-
-    // SQL checks use a quote/comment-aware statement splitter so semicolons and
-    // keywords inside string literals do not create false findings.
-    static scanSql(lines) {
-        const issues = [];
-        const code = lines.join('\n');
-        const e = (offset, msg, hint, kind, sev = 'warning') => {
-            const safeOffset = Math.max(0, Math.min(code.length, offset));
-            const before = code.slice(0, safeOffset);
-            issues.push(this.makeIssue(before.split('\n').length, msg, hint, kind, safeOffset - before.lastIndexOf('\n'), sev));
-        };
-        const maskSql = text => {
-            let out = '';
-            let state = 'normal';
-            for (let i = 0; i < text.length; i++) {
-                const ch = text[i], next = text[i + 1];
-                if (state === 'line') {
-                    if (ch === '\n') { out += '\n'; state = 'normal'; }
-                    else out += ' ';
-                    continue;
-                }
-                if (state === 'block') {
-                    if (ch === '*' && next === '/') { out += '  '; i++; state = 'normal'; }
-                    else out += ch === '\n' ? '\n' : ' ';
-                    continue;
-                }
-                if (state === 'quote') {
-                    if (ch === "'" && next === "'") { out += '  '; i++; continue; }
-                    if (ch === "'") { out += ' '; state = 'normal'; }
-                    else out += ch === '\n' ? '\n' : ' ';
-                    continue;
-                }
-                if ((ch === '-' && next === '-') || ch === '#') {
-                    out += ch === '#' ? ' ' : '  ';
-                    if (ch === '-') i++;
-                    state = 'line';
-                    continue;
-                }
-                if (ch === '/' && next === '*') { out += '  '; i++; state = 'block'; continue; }
-                if (ch === "'") { out += ' '; state = 'quote'; continue; }
-                out += ch;
-            }
-            return out;
-        };
-        const splitTopLevel = text => {
-            const parts = [];
-            let start = 0, depth = 0, quote = false;
-            for (let i = 0; i < text.length; i++) {
-                const ch = text[i], next = text[i + 1];
-                if (quote) {
-                    if (ch === "'" && next === "'") { i++; continue; }
-                    if (ch === "'") quote = false;
-                    continue;
-                }
-                if (ch === "'") { quote = true; continue; }
-                if (ch === '(') depth++;
-                else if (ch === ')') depth = Math.max(0, depth - 1);
-                else if (ch === ',' && depth === 0) { parts.push(text.slice(start, i).trim()); start = i + 1; }
-            }
-            parts.push(text.slice(start).trim());
-            return parts.filter(Boolean);
-        };
-        const matchingParen = (text, open) => {
-            let depth = 0, quote = false;
-            for (let i = open; i < text.length; i++) {
-                const ch = text[i], next = text[i + 1];
-                if (quote) {
-                    if (ch === "'" && next === "'") { i++; continue; }
-                    if (ch === "'") quote = false;
-                    continue;
-                }
-                if (ch === "'") { quote = true; continue; }
-                if (ch === '(') depth++;
-                else if (ch === ')' && --depth === 0) return i;
-            }
-            return -1;
-        };
-        const chunks = [];
-        let state = 'normal', start = 0, quoteStart = -1, commentStart = -1;
-        for (let i = 0; i < code.length; i++) {
-            const ch = code[i], next = code[i + 1];
-            if (state === 'line') {
-                if (ch === '\n') state = 'normal';
-                continue;
-            }
-            if (state === 'block') {
-                if (ch === '*' && next === '/') { i++; state = 'normal'; }
-                continue;
-            }
-            if (state === 'quote') {
-                if (ch === "'" && next === "'") { i++; continue; }
-                if (ch === "'") state = 'normal';
-                continue;
-            }
-            if ((ch === '-' && next === '-') || ch === '#') {
-                commentStart = i;
-                if (ch === '-') i++;
-                state = 'line';
-                continue;
-            }
-            if (ch === '/' && next === '*') { commentStart = i; i++; state = 'block'; continue; }
-            if (ch === "'") { quoteStart = i; state = 'quote'; continue; }
-            if (ch === ';') { chunks.push({ text: code.slice(start, i), start }); start = i + 1; }
-        }
-        if (state === 'quote') e(quoteStart, "Unterminated SQL string literal.", "Close the string with a matching single quote; escape a quote as ''.", "SQL syntax", "error");
-        if (state === 'block') e(commentStart, "Unterminated SQL block comment.", "Add */ to close the comment.", "SQL syntax", "error");
-        if (start < code.length) chunks.push({ text: code.slice(start), start });
-
-        for (const chunk of chunks) {
-            const raw = chunk.text;
-            const masked = maskSql(raw);
-            const sql = masked.replace(/\s+/g, ' ').trim();
-            if (!sql) continue;
-            const upper = sql.toUpperCase();
-            const leading = raw.search(/\S/);
-            const at = needle => {
-                const index = sql.indexOf(needle);
-                return chunk.start + Math.max(0, leading) + Math.max(0, index);
-            };
-            const startOffset = chunk.start + Math.max(0, leading);
-
-            if (/^UPDATE\b/.test(upper)) {
-                if (!/\bSET\b/.test(upper)) e(startOffset, "UPDATE statement is missing SET.", "Add SET column = value before the optional WHERE clause.", "SQL syntax", "error");
-                if (!/\bWHERE\b/.test(upper)) e(startOffset, "UPDATE has no WHERE clause and will modify every row.", "Add a restrictive WHERE clause or make the full-table update explicit.", "SQL safety", "warning");
-            }
-            if (/^DELETE\s+FROM\b/.test(upper) && !/\bWHERE\b/.test(upper)) {
-                e(startOffset, "DELETE has no WHERE clause and will remove every row.", "Add a restrictive WHERE clause or confirm that a full-table delete is intended.", "SQL safety", "warning");
-            }
-            if (/^(?:DROP|TRUNCATE)\b/.test(upper)) {
-                e(startOffset, "Destructive SQL statement detected.", "Verify the target and consider a transaction or backup before running it.", "SQL safety", "warning");
-            }
-            if (/\bSELECT\s+\*/.test(upper)) {
-                e(at('SELECT'), "SELECT * couples the query to every column and can fetch unnecessary data.", "List the columns the caller actually needs.", "SQL performance", "info");
-            }
-            for (const m of upper.matchAll(/(?:=|<>|!=|<|>)\s*NULL\b/g)) {
-                e(at(m[0]), "NULL is compared with an operator; the comparison will not behave as intended.", "Use IS NULL or IS NOT NULL instead of =, <>, or != NULL.", "SQL logic", "error");
-            }
-            if (/\b(?:WHERE|OR|AND)\s+(?:1\s*=\s*1|TRUE\s*=\s*TRUE)\b/.test(upper) || /\b(?:OR|AND)\s+1\s*=\s*1\b/.test(raw.toUpperCase())) {
-                e(at('WHERE'), "Tautological SQL predicate detected.", "Remove the always-true condition; it can hide a missing filter or enable SQL injection.", "SQL security", "warning");
-            }
-            if (/\bIN\s*\(\s*\)/.test(upper) || /\bVALUES\s*\(\s*\)/.test(upper)) {
-                e(startOffset, "Empty IN or VALUES list is invalid SQL.", "Provide at least one value or handle the empty collection before building the query.", "SQL syntax", "error");
-            }
-            if (/\bLIMIT\s*-\d+\b|\bOFFSET\s*-\d+\b/.test(upper)) {
-                e(startOffset, "LIMIT/OFFSET cannot use a negative value.", "Use a non-negative integer or validate the pagination input.", "SQL syntax", "error");
-            }
-            if (/\bBETWEEN\b/.test(upper)) {
-                const between = upper.indexOf('BETWEEN');
-                const tail = upper.slice(between).split(/\b(?:WHERE|GROUP BY|ORDER BY|LIMIT|UNION)\b/)[0];
-                if (!/\bAND\b/.test(tail)) e(at('BETWEEN'), "BETWEEN expression is missing its AND boundary.", "Use BETWEEN lower_value AND upper_value.", "SQL syntax", "error");
-            }
-            const caseCount = (upper.match(/\bCASE\b/g) || []).length;
-            const endCount = (upper.match(/\bEND\b/g) || []).length;
-            if (caseCount > endCount) e(startOffset, "CASE expression is missing END.", "Close every CASE expression with END.", "SQL syntax", "error");
-
-            for (const join of upper.matchAll(/\b(?:(?:LEFT|RIGHT|FULL|INNER|OUTER|CROSS|NATURAL)\s+)?JOIN\b/g)) {
-                const beforeJoin = upper.slice(Math.max(0, join.index - 16), join.index);
-                if (/\b(?:CROSS|NATURAL)\s*$/.test(beforeJoin)) continue;
-                const after = upper.slice(join.index + join[0].length);
-                const boundary = after.search(/\b(?:JOIN|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|UNION)\b/);
-                const segment = boundary >= 0 ? after.slice(0, boundary) : after;
-                if (!/\bON\b|\bUSING\s*\(/.test(segment)) {
-                    e(chunk.start + Math.max(0, leading) + join.index, "JOIN is missing an ON or USING condition.", "Add the join relationship explicitly or use CROSS JOIN when a Cartesian product is intentional.", "SQL logic", "warning");
-                }
-            }
-
-            const from = upper.match(/\bFROM\b/);
-            if (from) {
-                const fromTail = upper.slice(from.index + 4).split(/\b(?:WHERE|GROUP BY|ORDER BY|HAVING|LIMIT|UNION)\b/)[0];
-                if (splitTopLevel(fromTail).length > 1) {
-                    e(at('FROM') + 5, "Implicit comma join found in FROM.", "Use an explicit JOIN with an ON condition so relationships are visible and less error-prone.", "SQL logic", "warning");
-                }
-            }
-            if (/^SELECT\s*(?:FROM|WHERE|GROUP BY|ORDER BY|LIMIT)\b/.test(upper)) {
-                e(startOffset, "SELECT statement is missing its select list.", "Add one or more expressions between SELECT and the next clause.", "SQL syntax", "error");
-            }
-            if (/^INSERT\s+INTO\b/.test(upper) && !/\b(?:VALUES|SELECT|DEFAULT\s+VALUES|SET)\b/.test(upper)) {
-                e(startOffset, "INSERT statement is missing VALUES, SELECT, or DEFAULT VALUES.", "Provide the rows to insert.", "SQL syntax", "error");
-            }
-            if (/\bHAVING\b/.test(upper) && !/\bGROUP\s+BY\b/.test(upper) && !/\b(?:COUNT|SUM|AVG|MIN|MAX)\s*\(/.test(upper)) {
-                e(at('HAVING'), "HAVING is used without GROUP BY or an aggregate expression.", "Move the filter to WHERE or add the intended grouping/aggregate.", "SQL logic", "warning");
-            }
-            const limitIndex = upper.indexOf('LIMIT');
-            const orderIndex = upper.indexOf('ORDER BY');
-            if (limitIndex >= 0 && orderIndex > limitIndex) {
-                e(chunk.start + Math.max(0, leading) + orderIndex, "ORDER BY appears after LIMIT.", "Place ORDER BY before LIMIT/OFFSET.", "SQL syntax", "error");
-            }
-            if (/\b==\b/.test(upper)) e(at('=='), "SQL uses a single equals sign for comparison.", "Replace == with =.", "SQL syntax", "error");
-
-            if (/^CREATE\s+TABLE\b/.test(upper)) {
-                const open = sql.indexOf('(');
-                const close = open >= 0 ? matchingParen(sql, open) : -1;
-                if (open < 0 || close < 0) {
-                    e(startOffset, "CREATE TABLE is missing a complete column definition list.", "Add a parenthesized list of columns and constraints.", "SQL syntax", "error");
-                } else {
-                    const definitions = splitTopLevel(sql.slice(open + 1, close));
-                    if (!definitions.length) e(startOffset + open, "CREATE TABLE has no columns or constraints.", "Add at least one column definition.", "SQL syntax", "error");
-                    const names = new Set();
-                    for (const definition of definitions) {
-                        const first = definition.match(/^["\x60\[]?([A-Za-z_][\w$]*)["\x60\]]?/);
-                        const keyword = (first ? first[1] : '').toUpperCase();
-                        if (!first || /^(PRIMARY|UNIQUE|CONSTRAINT|FOREIGN|CHECK|INDEX|KEY)$/.test(keyword)) continue;
-                        if (names.has(keyword)) e(startOffset, "CREATE TABLE repeats column '" + first[1] + "'.", "Rename or remove the duplicate column.", "SQL schema", "error");
-                        names.add(keyword);
-                        const rest = definition.slice(first[0].length).trim();
-                        if (!rest || /^(?:,|CONSTRAINT)\s*$/i.test(rest)) {
-                            e(startOffset, "Column '" + first[1] + "' is missing a data type.", "Add a type such as INTEGER, TEXT, BOOLEAN, or a dialect-specific type.", "SQL schema", "error");
-                        }
-                    }
-                }
-            }
-            // Preserve quoted values for arity checks; the masked form turns string
-            // literals into whitespace and previously made valid INSERTs look short.
-            const insertSql = raw.replace(/\s+/g, ' ').trim();
-            const insert = insertSql.match(/^INSERT\s+INTO\s+[^\s(]+\s*(?:\(([^)]*)\))?\s+VALUES\s*(\(.+\))$/i);
-            if (insert && insert[1]) {
-                const columns = splitTopLevel(insert[1]);
-                const rows = splitTopLevel(insert[2]);
-                const hasMismatch = rows.some(row => {
-                    const close = row.startsWith('(') ? matchingParen(row, 0) : -1;
-                    return close === row.length - 1 && columns.length !== splitTopLevel(row.slice(1, -1)).length;
-                });
-                if (hasMismatch) {
-                    e(startOffset, "INSERT column count does not match value count.", "Provide one value for each listed column.", "SQL syntax", "error");
-                }
-            }
-            if (/^CREATE\s+INDEX\b/.test(upper) && !/\bON\b/.test(upper)) e(startOffset, "CREATE INDEX is missing its ON table clause.", "Use CREATE INDEX name ON table (column).", "SQL syntax", "error");
-            if (/^CREATE\s+VIEW\b/.test(upper) && !/\bAS\s+SELECT\b/.test(upper)) e(startOffset, "CREATE VIEW is missing AS SELECT.", "Define the query that supplies the view.", "SQL syntax", "error");
-            if (/^ALTER\s+TABLE\b/.test(upper) && !/\b(?:ADD|ALTER|DROP|RENAME)\b/.test(upper)) e(startOffset, "ALTER TABLE has no schema change operation.", "Add ADD, ALTER, DROP, or RENAME with the intended change.", "SQL syntax", "error");
-
-            const unionParts = upper.split(/\bUNION(?:\s+ALL)?\b/);
-            if (unionParts.length > 2) {
-                const counts = unionParts.map(part => {
-                    const select = part.match(/\bSELECT\b([\s\S]*?)(?:\bFROM\b|$)/);
-                    return select ? splitTopLevel(select[1]).length : 0;
-                }).filter(Boolean);
-                if (counts.length > 1 && counts.some(count => count !== counts[0])) {
-                    e(startOffset, "UNION branches return different numbers of columns.", "Make every SELECT in the UNION return the same number of expressions.", "SQL logic", "error");
-                }
-            }
-        }
-        return issues;
-    }
-
-    // Advanced CSS checks
-    static scanCssAdvanced(lines) {
-        const issues = [];
-        const e = (ln, msg, hint, kind, col, sev) => issues.push(this.makeIssue(ln, msg, hint, kind, col ?? null, sev ?? "warning"));
-        let importantCount = 0;
-        let importantFirstLine = -1;
-        let hasColor = false;
-        let hasBgColor = false;
-        const vendorPrefixProps = {};
-        // Track per-rule-block state for duplicate property and margin:auto checks
-        let inBlock = false;
-        let blockProps = new Map(); // prop -> first line seen
-        let blockStartLine = -1;
-        let blockHasWidth = false;
-        let marginAutoLine = -1;
-        lines.forEach((line, idx) => {
-            const lineNum = idx + 1;
-            const trimmed = line.trim();
-            // !important overuse
-            if (/!important/i.test(trimmed)) {
-                importantCount++;
-                if (importantFirstLine === -1) importantFirstLine = lineNum;
-            }
-            // color without background-color (track both)
-            if (/^\s*color\s*:/i.test(trimmed)) hasColor = true;
-            if (/^\s*background-color\s*:/i.test(trimmed)) hasBgColor = true;
-            // Vendor prefixes: track which vendor-prefixed props exist and whether standard follows
-            const vendorMatch = trimmed.match(/^(-webkit-|-moz-|-ms-|-o-)([a-z-]+)\s*:/i);
-            if (vendorMatch) {
-                const prop = vendorMatch[2];
-                if (!vendorPrefixProps[prop]) vendorPrefixProps[prop] = { lines: [], hasStandard: false };
-                vendorPrefixProps[prop].lines.push(lineNum);
-            }
-            // Check if standard property exists on same/nearby lines
-            const standardMatch = trimmed.match(/^([a-z][a-z-]+)\s*:/i);
-            if (standardMatch && !/^-/.test(trimmed)) {
-                const prop = standardMatch[1];
-                if (vendorPrefixProps[prop]) vendorPrefixProps[prop].hasStandard = true;
-            }
-            // Block tracking for duplicate properties, margin:auto, z-index, float, 0px
-            if (trimmed.endsWith('{')) {
-                inBlock = true;
-                blockProps = new Map();
-                blockStartLine = lineNum;
-                blockHasWidth = false;
-                marginAutoLine = -1;
-            } else if (trimmed === '}') {
-                // Check margin:auto without width
-                if (marginAutoLine > 0 && !blockHasWidth) {
-                    e(marginAutoLine, "'margin: auto' is set but no 'width' is defined in this rule block.", "margin: auto only centers block elements that have an explicit width.", "CSS layout", null, "info");
-                }
-                inBlock = false;
-                blockProps = new Map();
-                blockHasWidth = false;
-                marginAutoLine = -1;
-            }
-            if (inBlock && trimmed.includes(':') && !trimmed.startsWith('//') && !trimmed.startsWith('/*')) {
-                const propMatch = trimmed.match(/^([\w-]+)\s*:/);
-                if (propMatch) {
-                    const prop = propMatch[1].toLowerCase();
-                    // NEW: duplicate property in same rule block
-                    if (blockProps.has(prop)) {
-                        e(lineNum, `Duplicate CSS property '${prop}' in the same rule block.`, `Remove or merge the duplicate '${prop}' declaration — the second one overrides the first.`, "CSS quality", null, "warning");
-                    } else {
-                        blockProps.set(prop, lineNum);
-                    }
-                    // Track width
-                    if (prop === 'width') blockHasWidth = true;
-                    // Track margin:auto
-                    if (prop === 'margin' && /:\s*auto\b/i.test(trimmed)) marginAutoLine = lineNum;
-                    // NEW: z-index > 9000
-                    if (prop === 'z-index') {
-                        const zMatch = trimmed.match(/:\s*(\d+)/);
-                        if (zMatch && parseInt(zMatch[1], 10) > 9000) {
-                            e(lineNum, `z-index value ${zMatch[1]} is extremely high (> 9000).`, "Avoid arbitrarily large z-index values; use a z-index scale (e.g. 100, 200, 300) for maintainability.", "CSS quality", null, "info");
-                        }
-                    }
-                    // NEW: float usage
-                    if (prop === 'float' && !/none/i.test(trimmed)) {
-                        e(lineNum, "'float' is used — consider modern layout methods.", "Replace float-based layouts with Flexbox or CSS Grid for simpler, more robust layouts.", "CSS quality", null, "info");
-                    }
-                    // NEW: 0px instead of 0
-                    if (/:\s*0px\b/.test(trimmed)) {
-                        e(lineNum, "Value '0px' should be written as just '0' — units are unnecessary on zero.", "Replace '0px' with '0'; CSS does not require units for zero values.", "CSS style", null, "info");
-                    }
-                    // font-size in px on root/body — accessibility concern (not on components)
-                    if (prop === 'font-size' && /:\s*\d+px\b/.test(trimmed)) {
-                        // Only flag on html/body selectors, not component-level rules
-                        const selector = (lines.slice(Math.max(0, idx - 8), idx).reverse().find(l => /^\s*[a-z][\w\s,:.#[\]>+~*()-]*\s*\{/.test(l.trim())) || '').trim();
-                        if (/^(html|body)\s*[\{,]/.test(selector)) {
-                            e(lineNum, "'font-size' in 'px' on html/body prevents users from scaling text in their browser.", "Use 'rem' on html/body so all relative sizes scale with user preferences.", "CSS accessibility", null, "info");
-                        }
-                    }
-                }
-            }
-            // Universal selector warning — only flag when combined with heavy properties, not simple resets
-            if (/^\*\s*\{/.test(trimmed) || /,\s*\*\s*\{/.test(trimmed)) {
-                // Common reset patterns (margin/padding/box-sizing) are fine — only flag if it sets visual properties
-                const nextFewLines = lines.slice(idx + 1, idx + 6).join(' ');
-                if (/\b(font-size|color|background|display|position|overflow)\s*:/i.test(nextFewLines)) {
-                    e(lineNum, "Universal selector '*' with visual properties applies to every element.", "Scope this to a container: '.container *', or split into targeted selectors.", "CSS performance", null, "info");
-                }
-            }
-        });
-        // Report !important overuse (more than 3)
-        if (importantCount > 3) {
-            e(importantFirstLine > 0 ? importantFirstLine : 1, `!important used ${importantCount} times in this file.`, "Avoid overusing !important; restructure selectors for proper specificity instead.", "CSS quality", null, "warning");
-        }
-        // Only flag color-without-background if file has multiple color rules (likely a full stylesheet)
-        if (hasColor && !hasBgColor && importantCount > 0) {
-            e(1, "`color` is set but `background-color` is not defined in this file.", "Set both `color` and `background-color` to ensure readable contrast.", "CSS accessibility", null, "info");
-        }
-        // Report vendor prefixes without standard property
-        for (const [prop, info] of Object.entries(vendorPrefixProps)) {
-            if (!info.hasStandard) {
-                e(info.lines[0], `Vendor-prefixed property '-*-${prop}' has no standard '${prop}' fallback.`, `Add the standard \`${prop}\` property after the vendor-prefixed versions.`, "CSS compatibility", null, "warning");
-            }
-        }
-        return issues;
-    }
-    // Instant recognition from a single unmistakable token — runs before full scoring
-    static earlyHint(code) {
-        const hints = [
-            [/<\?php/i,                                          'PHP'],
-            [/<!DOCTYPE\s+html>/i,                               'HTML'],
-            [/^#!\/bin\/(bash|sh)\b/m,                           'Bash'],
-            [/^#!\/usr\/bin\/(perl|env\s+perl)/m,               'Perl'],
-            [/^#!\/usr\/bin\/(ruby|env\s+ruby)/m,               'Ruby'],
-            [/^#!\/usr\/bin\/(python3?|env\s+python3?)/m,       'Python'],
-            [/\bIDENTIFICATION\s+DIVISION\b/i,                  'COBOL'],
-            [/\bIMPLICIT\s+NONE\b/i,                            'Fortran'],
-            [/\bPROGRAM-ID\b/i,                                  'COBOL'],
-            [/const\s+std\s*=\s*@import\s*\("std"\)/,           'Zig'],
-            [/@import\s*\("std"\)/,                              'Zig'],
-            [/\bcomptime\b/,                                     'Zig'],
-            [/section\s+\.(text|data|bss)\b/i,                  'Assembly'],
-            [/\bglobal\s+_start\b/,                             'Assembly'],
-            [/\bdefmodule\b/,                                    'Elixir'],
-            [/\bIO\.puts\b/,                                     'Elixir'],
-            [/^-module\s*\(/m,                                   'Erlang'],
-            [/\bio:format\b/,                                    'Erlang'],
-            [/\[<EntryPoint>\]/,                                 'F#'],
-            [/\bprintfn\b/,                                      'F#'],
-            [/\blet\s*\(\s*\)\s*=/,                              'OCaml'],
-            [/\bPrintf\.printf\b/,                               'OCaml'],
-            [/^\s*\(defn\b/m,                                    'Clojure'],
-            [/^\s*\(ns\s+\w/m,                                   'Clojure'],
-            [/\bputStrLn\b/,                                     'Haskell'],
-            [/\bmain\s*=\s*do\b/,                               'Haskell'],
-            [/\bimport\s+'package:flutter/,                      'Dart'],
-            [/\bStatelessWidget\b|\bStatefulWidget\b/,           'Dart'],
-            [/\battr_(reader|writer|accessor)\b/,               'Ruby'],
-            [/\bdo\s*\|[\w,\s]+\|/,                             'Ruby'],
-            [/@State\b|@Binding\b|@Published\b/,                'Swift'],
-            [/\bguard\s+let\b/,                                  'Swift'],
-            [/\bdata\s+class\s+\w+/,                            'Kotlin'],
-            [/\bwhen\s*\(\w+\)\s*\{/,                           'Kotlin'],
-            [/\bcase\s+class\b/,                                 'Scala'],
-            [/\bobject\s+\w+\s+extends\b/,                      'Scala'],
-            [/\bprintln!\s*\(/,                                  'Rust'],
-            [/\blet\s+mut\b/,                                    'Rust'],
-            [/\bcout\s*<</,                                      'C++'],
-            [/\bstd::/,                                          'C++'],
-            [/\bSystem\.out\.print/,                             'Java'],
-            [/\bpublic\s+static\s+void\s+main\b/,               'Java'],
-            [/\bConsole\.WriteLine\b/,                           'C#'],
-            [/\busing\s+System\b/,                               'C#'],
-            [/^package\s+\w+\s*$/m,                              'Go'],
-            [/\bfmt\.Print(?:ln|f)?\b/,                         'Go'],
-            [/\bggplot\s*\(/,                                    'R'],
-            [/\bdata\.frame\s*\(/,                               'R'],
-            [/\bipairs\s*\(|\bpairs\s*\(/,                      'Lua'],
-            [/\bIPO\b|\bWRITE\s*\(\s*\*\s*,/i,                 'Fortran'],
-            [/\bputs\b.*\bend\b/s,                               'Ruby'],
-            [/\bnim\s+import\b|\becho\s+"/,                      'Nim'],
-            [/\bwriteln\s*\(\s*["']/,                            'Pascal'],
-            [/\bBEGIN\b[\s\S]*\bEND\b/,                         'Pascal'],
-            [/^\?-\s/m,                                          'Prolog'],
-            [/\?-\s*[\w]+\s*\(/,                                 'Prolog'],
-            [/^\s*\(defun\b/m,                                   'Lisp'],
-            [/^\s*\(format\s+t\b/m,                             'Lisp'],
-            [/\b@\[[\w.]+\]/,                                    'Julia'],
-            [/\busing\s+\w+(?:,\s*\w+)*\s*$/m,                  'Julia'],
-        ];
-        for (const [pattern, lang] of hints) {
-            if (pattern.test(code)) return lang;
-        }
-        return null;
-    }
-    static detectLanguage(code) {
-        if (!code || code.trim().length < 3) return null;
-        const scores = {};
-        const add = (lang, pts) => { scores[lang] = (scores[lang] || 0) + pts; };
-        // Early hint: a single unmistakable token is enough to tentatively identify
-        const hint = this.earlyHint(code);
-        if (hint) add(hint, 50);
-        // --- Python ---
-        if (/^\s*def\s+\w+\s*\(/m.test(code)) add('Python', 20);
-        if (/^\s*class\s+\w+.*:/m.test(code)) add('Python', 15);
-        if (/\belif\b/.test(code)) add('Python', 20);
-        if (/^\s*from\s+\w+\s+import\b/m.test(code)) add('Python', 18);
-        if (/\bself\b/.test(code)) add('Python', 15);
-        if (/\bNone\b/.test(code) && !/\/\//.test(code)) add('Python', 10);
-        if (/\bTrue\b|\bFalse\b/.test(code) && !/\/\//.test(code)) add('Python', 8);
-        if (/\blambda\b/.test(code)) add('Python', 12);
-        if (/\bprint\s*\(/.test(code) && !/console\./.test(code) && !/System\.out/.test(code) && !/\bprintln\b/.test(code)) add('Python', 10);
-        if (/#[^!]/.test(code) && !/\/\//.test(code)) add('Python', 5);
-        // --- JavaScript ---
-        if (/\bconsole\.log\b/.test(code)) add('Javascript', 22);
-        if (/\bdocument\.\w+|\bwindow\.\w+/.test(code)) add('Javascript', 20);
-        if (/\bmodule\.exports\b/.test(code)) add('Javascript', 22);
-        if (/\brequire\s*\(['"]/.test(code)) add('Javascript', 18);
-        if (/\bPromise\b|\basync\s+function\b/.test(code)) add('Javascript', 14);
-        if (/\bconst\b|\blet\b/.test(code) && !/:\s*(string|number|boolean)\b/.test(code)) add('Javascript', 8);
-        if (/\bfunction\s+\w+\s*\(/.test(code) && !/\bdef\b/.test(code) && !/\bfun\b/.test(code)) add('Javascript', 10);
-        if (/=>\s*[{(]/.test(code)) add('Javascript', 10);
-        if (/\bnull\b/.test(code) && /\bundefined\b/.test(code)) add('Javascript', 10);
-        if (/\bdocument\.getElementById\b/.test(code)) add('Javascript', 22);
-        // --- TypeScript ---
-        if (/\binterface\s+[A-Z]/.test(code)) add('TypeScript', 28);
-        if (/\btype\s+[A-Z]\w*\s*=/.test(code)) add('TypeScript', 25);
-        if (/\benum\s+\w+\s*\{/.test(code)) add('TypeScript', 25);
-        if (/:\s*(string|number|boolean|void|never|unknown|any)\b/.test(code)) add('TypeScript', 18);
-        if (/\bReadonly<|\bPartial<|\bRequired<|\bRecord</.test(code)) add('TypeScript', 28);
-        if (/\)\s*:\s*[A-Za-z][\w<>[\]| ]+\s*(=>|\{)/.test(code)) add('TypeScript', 18);
-        if (/<[A-Z]\w*>/.test(code) && /\binterface\b|\btype\b/.test(code)) add('TypeScript', 12);
-        // --- HTML ---
-        if (/<!DOCTYPE\s+html>/i.test(code)) add('HTML', 40);
-        if (/<html[\s>]/i.test(code)) add('HTML', 25);
-        if (/<\/?(div|span|body|head|script|style|meta|link)\b/i.test(code)) add('HTML', 20);
-        if (/<\/\w+>/.test(code) && /<\w[\w-]*[\s>]/.test(code)) add('HTML', 15);
-        // --- C++ ---
-        if (/#include\s*<\w+>/.test(code)) add('C++', 22);
-        if (/\bstd::/.test(code)) add('C++', 25);
-        if (/\bcout\s*<</.test(code)) add('C++', 28);
-        if (/\btemplate\s*</.test(code)) add('C++', 28);
-        if (/\bvector\s*<|\bmap\s*<|\bunordered_map\s*</.test(code)) add('C++', 22);
-        if (/\bint\s+main\s*\(\s*\)/.test(code) && /#include/.test(code)) add('C++', 15);
-        if (/\bdelete\s+\w+/.test(code) && /\bnew\b/.test(code)) add('C++', 15);
-        // --- C ---
-        if (/#include\s*<stdio\.h>/.test(code)) add('C', 30);
-        if (/\bprintf\s*\(/.test(code) && !/#include\s*<iostream>/.test(code) && !/\bstd::/.test(code)) add('C', 22);
-        if (/\bscanf\s*\(/.test(code)) add('C', 22);
-        if (/\bmalloc\s*\(|\bcalloc\s*\(|\bfree\s*\(/.test(code)) add('C', 22);
-        if (/\bint\s+main\s*\(\s*void\s*\)/.test(code)) add('C', 22);
-        if (/#include\s*<string\.h>|#include\s*<stdlib\.h>/.test(code)) add('C', 15);
-        // --- Java ---
-        if (/\bpublic\s+static\s+void\s+main\s*\(/.test(code)) add('Java', 35);
-        if (/\bSystem\.out\.print/.test(code)) add('Java', 28);
-        if (/\bpublic\s+class\s+[A-Z]/.test(code)) add('Java', 22);
-        if (/\bimport\s+java\./.test(code)) add('Java', 28);
-        if (/@Override\b/.test(code)) add('Java', 22);
-        if (/\bArrayList\b|\bHashMap\b|\bLinkedList\b/.test(code)) add('Java', 18);
-        if (/\bthrows\s+\w+Exception\b/.test(code)) add('Java', 20);
-        // --- C# ---
-        if (/\bConsole\.Write(?:Line)?\s*\(/.test(code)) add('C#', 28);
-        if (/\busing\s+System\b/.test(code)) add('C#', 28);
-        if (/\bnamespace\s+\w+/.test(code)) add('C#', 22);
-        if (/\bpublic\s+static\s+void\s+Main\s*\(/.test(code)) add('C#', 25);
-        if (/\bList<\w+>\b|\bDictionary</.test(code)) add('C#', 18);
-        if (/\bforeach\s*\(/.test(code) && /\bvar\b/.test(code)) add('C#', 15);
-        if (/\[Serializable\]|\[HttpGet\]|\[ApiController\]/.test(code)) add('C#', 25);
-        // --- Go ---
-        if (/^package\s+\w+/m.test(code)) add('Go', 28);
-        if (/\bfunc\s+main\s*\(\)/.test(code)) add('Go', 28);
-        if (/\bfmt\.Print(?:ln|f)?/.test(code)) add('Go', 22);
-        if (/:=/.test(code) && /^package\b/m.test(code)) add('Go', 15);
-        if (/\bgoroutine\b|\bchan\b|\bselect\b/.test(code)) add('Go', 25);
-        if (/\bimport\s+\(/.test(code) && /^package\b/m.test(code)) add('Go', 18);
-        // --- Rust ---
-        if (/\bfn\s+main\s*\(\)/.test(code)) add('Rust', 25);
-        if (/\bprintln!\s*\(/.test(code)) add('Rust', 28);
-        if (/\blet\s+mut\b/.test(code)) add('Rust', 22);
-        if (/\bimpl\s+\w+/.test(code)) add('Rust', 20);
-        if (/\bSome\(|\bNone\b|\bOk\(|\bErr\(/.test(code)) add('Rust', 15);
-        if (/\buse\s+std::/.test(code)) add('Rust', 22);
-        if (/\bmatch\s+\w+\s*\{/.test(code)) add('Rust', 15);
-        if (/\bunwrap\s*\(\)/.test(code)) add('Rust', 12);
-        // --- PHP ---
-        if (/<\?php/.test(code)) add('PHP', 40);
-        if (/\$[a-zA-Z_]\w*/.test(code) && /\becho\b/.test(code)) add('PHP', 22);
-        if (/\bforeach\s*\(\s*\$/.test(code)) add('PHP', 22);
-        if (/\barray\s*\(/.test(code) && /\$/.test(code)) add('PHP', 15);
-        // --- Ruby ---
-        if (/^\s*end\s*$/m.test(code)) add('Ruby', 18);
-        if (/\bputs\s+/.test(code) && /^\s*end\s*$/m.test(code)) add('Ruby', 20);
-        if (/\bdo\s*\|[\w,\s]+\|/.test(code)) add('Ruby', 25);
-        if (/\battr_(reader|writer|accessor)\b/.test(code)) add('Ruby', 28);
-        if (/=~\s*\//.test(code)) add('Ruby', 18);
-        if (/\.each\s+do\b|\bmap\s*\{/.test(code)) add('Ruby', 18);
-        // --- Swift ---
-        if (/\bimport\s+(Foundation|UIKit|SwiftUI)\b/.test(code)) add('Swift', 35);
-        if (/\bguard\s+let\b|\bif\s+let\b/.test(code)) add('Swift', 22);
-        if (/@State\b|@Binding\b|@Published\b|@ObservedObject\b/.test(code)) add('Swift', 35);
-        if (/\bvar\s+\w+\s*:\s*[A-Z]/.test(code) && /\bfunc\b/.test(code)) add('Swift', 18);
-        if (/\bnil\b/.test(code) && /\bfunc\b/.test(code)) add('Swift', 10);
-        // --- Kotlin ---
-        if (/\bfun\s+main\s*\(/.test(code)) add('Kotlin', 28);
-        if (/\bprintln\s*\(/.test(code) && /\bval\b|\bvar\b/.test(code)) add('Kotlin', 22);
-        if (/\bdata\s+class\s+\w+/.test(code)) add('Kotlin', 28);
-        if (/\bwhen\s*\(/.test(code)) add('Kotlin', 22);
-        if (/\bval\s+\w+\s*:/.test(code) && /\bfun\b/.test(code)) add('Kotlin', 15);
-        // --- Bash ---
-        if (/^#!\/bin\/(bash|sh)/m.test(code)) add('Bash', 40);
-        if (/\[\[.*\]\]/.test(code)) add('Bash', 25);
-        if (/\bfi\b/.test(code) && /\bthen\b/.test(code)) add('Bash', 22);
-        if (/\bdone\b/.test(code) && /\bdo\b/.test(code)) add('Bash', 20);
-        if (/\$\{[^}]+\}/.test(code)) add('Bash', 12);
-        // --- R ---
-        if (/<-\s*\w/.test(code) && !/\bclass\b/.test(code)) add('R', 22);
-        if (/\blibrary\s*\(/.test(code)) add('R', 22);
-        if (/\bggplot\s*\(|\bdplyr\b|\btidyr\b/.test(code)) add('R', 28);
-        if (/\bdata\.frame\s*\(/.test(code)) add('R', 22);
-        // --- Lua ---
-        if (/\blocal\s+\w+\s*=/.test(code) && /\bend\b/.test(code)) add('Lua', 22);
-        if (/\bipairs\s*\(|\bpairs\s*\(/.test(code)) add('Lua', 25);
-        if (/\bfunction\s+\w+\s*\(/.test(code) && /\bend\b/.test(code) && !/\bdef\b/.test(code)) add('Lua', 18);
-        if (/--[^\n]/.test(code) && /\blocal\b/.test(code)) add('Lua', 12);
-        // --- Scala ---
-        if (/\bobject\s+\w+\s+extends\b/.test(code)) add('Scala', 28);
-        if (/\bcase\s+class\b/.test(code)) add('Scala', 28);
-        if (/\bdef\s+\w+\s*\(/.test(code) && /\bval\b/.test(code)) add('Scala', 15);
-        if (/\bprintln\s*\(/.test(code) && /\bval\b/.test(code) && /\bdef\b/.test(code)) add('Scala', 15);
-        // --- Haskell ---
-        if (/\bmain\s*=\s*do\b/.test(code)) add('Haskell', 35);
-        if (/\bputStrLn\b|\bputStr\b/.test(code)) add('Haskell', 28);
-        if (/\bimport\s+Data\./.test(code)) add('Haskell', 22);
-        if (/\s->\s/.test(code) && /\b(where|let|in)\b/.test(code)) add('Haskell', 18);
-        // --- Dart ---
-        if (/\bvoid\s+main\s*\(\s*\)/.test(code) && /\bprint\s*\(/.test(code)) add('Dart', 25);
-        if (/\bimport\s+'package:flutter/.test(code)) add('Dart', 40);
-        if (/\bWidget\b|\bStatefulWidget\b|\bStatelessWidget\b/.test(code)) add('Dart', 35);
-        // --- Perl ---
-        if (/^#!\/usr\/bin\/(perl|env\s+perl)/m.test(code)) add('Perl', 40);
-        if (/\buse\s+strict\b/.test(code)) add('Perl', 22);
-        if (/\buse\s+warnings\b/.test(code)) add('Perl', 18);
-        if (/\bmy\s+\$\w+/.test(code)) add('Perl', 20);
-        if (/\bsub\s+\w+\s*\{/.test(code)) add('Perl', 18);
-        if (/\bchomp\b/.test(code)) add('Perl', 22);
-        if (/\$_\b|\@_\b/.test(code)) add('Perl', 15);
-        // --- Elixir ---
-        if (/\bdefmodule\b/.test(code)) add('Elixir', 35);
-        if (/\bIO\.puts\b/.test(code)) add('Elixir', 28);
-        if (/\|>/.test(code) && /\bdef\b/.test(code)) add('Elixir', 20);
-        if (/\bdef\s+\w+\s*\(/.test(code) && /\bend\b/.test(code) && /\bdo\b/.test(code)) add('Elixir', 18);
-        // --- Erlang ---
-        if (/^-module\s*\(/m.test(code)) add('Erlang', 40);
-        if (/\bio:format\b/.test(code)) add('Erlang', 28);
-        if (/^-export\s*\(/m.test(code)) add('Erlang', 25);
-        if (/\bspawn\s*\(|\breceive\b/.test(code)) add('Erlang', 20);
-        // --- OCaml ---
-        if (/\blet\s*\(\s*\)\s*=/.test(code)) add('OCaml', 35);
-        if (/\bPrintf\.printf\b/.test(code)) add('OCaml', 28);
-        if (/\blet\s+rec\b/.test(code)) add('OCaml', 22);
-        if (/\bmatch\b.+\bwith\b/s.test(code) && !/\bRust\b/.test(code)) add('OCaml', 18);
-        if (/\bopen\s+[A-Z]\w+/.test(code)) add('OCaml', 15);
-        // --- F# ---
-        if (/\[<EntryPoint>\]/.test(code)) add('F#', 40);
-        if (/\bprintfn\b/.test(code)) add('F#', 30);
-        if (/\bopen\s+System\b/.test(code) && /\bprintfn\b/.test(code)) add('F#', 18);
-        if (/\|>/.test(code) && /\blet\b/.test(code) && /\bprintfn\b/.test(code)) add('F#', 15);
-        // --- Clojure ---
-        if (/^\s*\(ns\s+\w/m.test(code)) add('Clojure', 35);
-        if (/^\s*\(defn\b/m.test(code)) add('Clojure', 30);
-        if (/^\s*\(println\b/m.test(code)) add('Clojure', 22);
-        if (/^\s*\(def\s+\w/m.test(code)) add('Clojure', 18);
-        // --- Julia ---
-        if (/\busing\s+\w+(?:,\s*\w+)*\s*$/m.test(code)) add('Julia', 25);
-        if (/\bfunction\s+\w+\s*\(/.test(code) && /\bend\b/.test(code) && /::\w+/.test(code)) add('Julia', 22);
-        if (/\b@show\b|\b@time\b|\b@assert\b/.test(code)) add('Julia', 22);
-        if (/::Int(?:64)?|::Float(?:64)?|::String\b/.test(code)) add('Julia', 20);
-        if (/\bprintln\s*\(/.test(code) && /\busing\b/.test(code)) add('Julia', 15);
-        // --- Lisp ---
-        if (/^\s*\(defun\b/m.test(code)) add('Lisp', 35);
-        if (/^\s*\(format\s+t\b/m.test(code)) add('Lisp', 28);
-        if (/^\s*\(setq\b/m.test(code)) add('Lisp', 22);
-        if (/^\s*\(let\s+\(/m.test(code)) add('Lisp', 18);
-        // --- Prolog ---
-        if (/^\?-\s/m.test(code)) add('Prolog', 35);
-        if (/:-\s*use_module\b/.test(code)) add('Prolog', 30);
-        if (/\b\w+\s*:-\s*\w+/.test(code)) add('Prolog', 22);
-        if (/\bwrite\s*\(/.test(code) && /\.\s*$/m.test(code)) add('Prolog', 15);
-        // --- Fortran ---
-        if (/\bIMPLICIT\s+NONE\b/i.test(code)) add('Fortran', 35);
-        if (/\bPROGRAM\s+\w+/i.test(code) && /\bEND\s+PROGRAM\b/i.test(code)) add('Fortran', 30);
-        if (/\bWRITE\s*\(\s*\*\s*,/i.test(code)) add('Fortran', 25);
-        if (/\bREAL\s*::|INTEGER\s*::|LOGICAL\s*::/i.test(code)) add('Fortran', 22);
-        if (/\bSUBROUTINE\s+\w+/i.test(code)) add('Fortran', 20);
-        // --- COBOL ---
-        if (/\bIDENTIFICATION\s+DIVISION\b/i.test(code)) add('COBOL', 40);
-        if (/\bPROGRAM-ID\b/i.test(code)) add('COBOL', 30);
-        if (/\bDATA\s+DIVISION\b|\bPROCEDURE\s+DIVISION\b/i.test(code)) add('COBOL', 25);
-        if (/\bDISPLAY\s+["']/.test(code)) add('COBOL', 18);
-        if (/\bMOVE\b.+\bTO\b/i.test(code)) add('COBOL', 18);
-        // --- Assembly ---
-        if (/section\s+\.(text|data|bss)\b/i.test(code)) add('Assembly', 35);
-        if (/\bglobal\s+_start\b/.test(code)) add('Assembly', 30);
-        if (/\bmov\s+[a-z]{2,3}\s*,/i.test(code)) add('Assembly', 22);
-        if (/\bint\s+0x80\b|\bsyscall\b/.test(code)) add('Assembly', 25);
-        if (/\bpush\s+\w+|\bpop\s+\w+/.test(code) && /\bret\b/.test(code)) add('Assembly', 20);
-        // --- D ---
-        if (/\bimport\s+std\.stdio\b/.test(code)) add('D', 35);
-        if (/\bwriteln\s*\(/.test(code)) add('D', 25);
-        if (/\bimmutable\b/.test(code) && /\bauto\b/.test(code)) add('D', 20);
-        if (/\bvoid\s+main\s*\(\s*\)/.test(code) && /\bwriteln\b/.test(code)) add('D', 20);
-        // --- Zig ---
-        if (/@import\s*\("std"\)/.test(code)) add('Zig', 40);
-        if (/\bcomptime\b/.test(code)) add('Zig', 25);
-        if (/\bpub\s+fn\s+main\b/.test(code)) add('Zig', 22);
-        if (/\bstd\.debug\.print\b/.test(code)) add('Zig', 25);
-        if (/\bconst\s+\w+\s*=\s*@import\b/.test(code)) add('Zig', 22);
-        // --- Nim ---
-        if (/^import\s+\w+/m.test(code) && /\becho\s+"/.test(code)) add('Nim', 30);
-        if (/\bproc\s+\w+\s*\(/.test(code)) add('Nim', 25);
-        if (/\becho\s+"/.test(code) && /\bvar\b/.test(code)) add('Nim', 18);
-        if (/\bwhen\s+isMainModule\b/.test(code)) add('Nim', 30);
-        // --- Pascal ---
-        if (/\bprogram\s+\w+\s*;/i.test(code)) add('Pascal', 35);
-        if (/\bbegin\b/i.test(code) && /\bend\.\s*$/im.test(code)) add('Pascal', 28);
-        if (/\bwriteln\s*\(/.test(code) && /\bbegin\b/i.test(code)) add('Pascal', 22);
-        if (/\bvar\b/i.test(code) && /\binteger\b|\bstring\b|\breal\b/i.test(code)) add('Pascal', 18);
-        if (/\bprocedure\s+\w+/i.test(code)) add('Pascal', 18);
-        // Negative scoring: penalize languages when clear contradicting signals are present
-        const sub = (lang, pts) => { scores[lang] = (scores[lang] || 0) - pts; };
-        if (/\bconsole\.log\b/.test(code) || /\bdocument\.\w/.test(code)) { sub('Python', 20); sub('Java', 10); sub('Go', 10); }
-        if (/\bSystem\.out\.print\b/.test(code)) { sub('Javascript', 15); sub('Python', 15); sub('Go', 10); }
-        if (/\bdef\s+\w+\s*\(/.test(code) && /\bself\b/.test(code)) { sub('Javascript', 10); sub('Ruby', 10); }
-        if (/\belif\b/.test(code)) { sub('Javascript', 15); sub('Java', 15); sub('Go', 15); }
-        if (/<\?php/.test(code)) { sub('Javascript', 20); sub('Python', 20); }
-        if (/\bfn\s+main\b/.test(code) && /\blet\s+mut\b/.test(code)) { sub('Javascript', 15); sub('Go', 15); }
-        if (/\bpackage\s+main\b/.test(code) && /\bfunc\b/.test(code)) { sub('Rust', 10); sub('Javascript', 10); }
-        if (/\bimport\s+java\.\w/.test(code)) { sub('Kotlin', 5); sub('Scala', 5); sub('C#', 10); }
-        if (/\busing\s+System\b/.test(code)) { sub('Java', 15); sub('Javascript', 10); }
-        if (/\bprintln!\s*\(/.test(code)) { sub('Kotlin', 10); sub('Javascript', 10); }
-        // Clamp negative scores to 0
-        Object.keys(scores).forEach(k => { if (scores[k] < 0) scores[k] = 0; });
-        const sorted = Object.entries(scores).sort((a, b) => b[1] - a[1]);
-        if (sorted.length === 0) return null;
-        const [topLang, topScore] = sorted[0];
-        const runnerUp = sorted[1] ? sorted[1][1] : 0;
-        if (topScore >= 10 && topScore - runnerUp >= 8) {
-            const confidence = topScore >= 35 ? 'confirmed' : topScore >= 18 ? 'tentative' : null;
-            if (!confidence) return null;
-            return { lang: topLang, score: topScore, confidence, ext: JungleIntelligence.getDefaultExtension(topLang) || '.txt' };
-        }
-        return null;
     }
 }

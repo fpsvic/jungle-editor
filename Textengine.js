@@ -166,6 +166,16 @@ class JungleTextEngine {
             this.change(this.el.selectionStart, this.el.selectionEnd, '\n' + padding);
         });
         const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
+        const closers = { ')': true, ']': true, '}': true, '"': true, "'": true, '`': true };
+        // If the character you just typed is already sitting to the right of a collapsed
+        // caret (typically an auto-inserted closer), step over it instead of duplicating it.
+        if (!mod && closers[key] && this.el.selectionStart === this.el.selectionEnd
+                && this.el.value[this.el.selectionStart] === key) {
+            return stop(() => {
+                const pos = this.el.selectionStart + 1;
+                this.el.selectionStart = this.el.selectionEnd = pos;
+            });
+        }
         if (!mod && pairs[key]) return stop(() => {
             const start = this.el.selectionStart, end = this.el.selectionEnd, selected = this.el.value.slice(start, end);
             this.change(start, end, key + selected + pairs[key], start + 1, selected ? end + 1 : start + 1);

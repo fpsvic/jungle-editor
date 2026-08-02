@@ -5,6 +5,9 @@ var projectsDashboard = document.getElementById('projects-dashboard');
 var workspaceContainer = document.getElementById('workspace-container');
 var exitToHubHeaderBtn = document.getElementById('exit-to-hub-header-btn');
 var exitToSplashBtn = document.getElementById('exit-to-splash-btn');
+var blogScreen = document.getElementById('blog-screen');
+var openBlogBtn = document.getElementById('open-blog-btn');
+var blogBackBtn = document.getElementById('blog-back-btn');
 var editor = document.getElementById('code-editor');
 var highlightOverlay = document.getElementById('highlight-overlay');
 var lineGutter = document.getElementById('line-gutter');
@@ -58,26 +61,6 @@ var activeView = 'editor'; // 'editor', 'preview', 'terminal', 'console'
 var manualLanguageOverride = false;
 var terminalHistory = [];
 var terminalHistoryIdx = -1;
-function showConsoleIssues(issues, filename) {
-    if (!issues || issues.length === 0) {
-        consoleViewBody.innerHTML = `<span style="color:#74a896">✓ No issues detected in ${filename || 'current file'}.</span>`;
-        consoleStatus.textContent = 'CLEAR';
-        consoleStatus.style.color = '#74a896';
-        return;
-    }
-    const errors = issues.filter(i => i.severity === 'error');
-    const warnings = issues.filter(i => i.severity === 'warning');
-    const infos = issues.filter(i => i.severity === 'info');
-    consoleStatus.textContent = errors.length ? `${errors.length} ERROR${errors.length > 1 ? 'S' : ''}` : `${warnings.length} WARN`;
-    consoleStatus.style.color = errors.length ? '#FF5555' : '#FFB86C';
-    const rows = issues.map(i => {
-        const color = i.severity === 'error' ? '#FF5555' : i.severity === 'warning' ? '#FFB86C' : '#74a896';
-        const icon = i.severity === 'error' ? '✗' : i.severity === 'warning' ? '⚠' : 'ℹ';
-        const hint = i.hint ? `\n       💡 ${i.hint}` : '';
-        return `<span style="color:${color}">${icon} Line ${i.line || '?'}  [${i.kind || i.severity}]  ${i.msg}${hint}</span>`;
-    }).join('\n');
-    consoleViewBody.innerHTML = `<span style="color:#4a6057">${filename || 'file'} — ${issues.length} issue${issues.length > 1 ? 's' : ''}</span>\n${'─'.repeat(44)}\n${rows}`;
-}
 // Structured console renderer: group findings into collapsible sections and show the
 // exact source context for every line-based issue.
 function showConsoleIssues(issues, filename) {
@@ -307,7 +290,7 @@ function executeTerminalCommand(cmdLine) {
             if (!p) { terminalPrint(`touch: no project open\n`); break; }
             if (p.files[args[0]] !== undefined) { terminalPrint(`touch: ${args[0]}: already exists\n`); break; }
             p.files[args[0]] = '';
-            JungleStor.save(projects);
+            JungleStorage.saveProjects(projects);
             JungleUI.renderFileList();
             terminalPrint(`Created: ${args[0]}\n`);
             break;
@@ -317,7 +300,7 @@ function executeTerminalCommand(cmdLine) {
             if (Object.keys(p.files).length <= 1) { terminalPrint(`rm: cannot remove last file\n`); break; }
             delete p.files[args[0]];
             if (p.currentFile === args[0]) p.currentFile = Object.keys(p.files)[0];
-            JungleStor.save(projects);
+            JungleStorage.saveProjects(projects);
             JungleUI.renderFileList();
             JungleUI.loadFile(p.currentFile);
             terminalPrint(`removed '${args[0]}'\n`);
@@ -329,7 +312,7 @@ function executeTerminalCommand(cmdLine) {
             p.files[args[1]] = p.files[args[0]];
             delete p.files[args[0]];
             if (p.currentFile === args[0]) p.currentFile = args[1];
-            JungleStor.save(projects);
+            JungleStorage.saveProjects(projects);
             JungleUI.renderFileList();
             terminalPrint(`'${args[0]}' -> '${args[1]}'\n`);
             break;
@@ -337,7 +320,7 @@ function executeTerminalCommand(cmdLine) {
             if (args.length < 2) { terminalPrint(`Usage: cp <src> <dst>\n`); break; }
             if (!p || p.files[args[0]] === undefined) { terminalPrint(`cp: ${args[0]}: No such file\n`); break; }
             p.files[args[1]] = p.files[args[0]];
-            JungleStor.save(projects);
+            JungleStorage.saveProjects(projects);
             JungleUI.renderFileList();
             terminalPrint(`'${args[0]}' -> '${args[1]}'\n`);
             break;
@@ -494,6 +477,8 @@ function switchView(view, showInput = false) {
 enterBtn.onclick = () => { splashScreen.classList.add('fade-out'); setTimeout(() => { splashScreen.style.display = 'none'; splashScreen.style.pointerEvents = 'none'; }, 400); projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
 exitToSplashBtn.onclick = () => { splashScreen.style.display = 'flex'; splashScreen.style.pointerEvents = 'auto'; setTimeout(() => splashScreen.classList.remove('fade-out'), 50); projectsDashboard.classList.remove('show'); };
 exitToHubHeaderBtn.onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
+openBlogBtn.onclick = () => { splashScreen.style.display = 'none'; blogScreen.classList.add('visible'); blogScreen.scrollTop = 0; };
+blogBackBtn.onclick = () => { blogScreen.classList.remove('visible'); splashScreen.style.display = 'flex'; splashScreen.style.pointerEvents = 'auto'; };
 const addItemMenu = document.getElementById('add-item-menu');
 function closeAddItemMenu() {
     addItemMenu.classList.remove('show');
@@ -1094,7 +1079,7 @@ function analyzeWholeProject(p) {
     }
     return { map, results, scanned: map.length, total };
 }
-function runLiveAnalysis() {
+async function runLiveAnalysis() {
     const p = JungleUI.getCurrentProject();
     if (!p || !p.currentFile) return;
     // Whole-project mode (opt-in setting): map + scan every file, report bugs grouped by file.
@@ -1109,7 +1094,7 @@ function runLiveAnalysis() {
     const lang = JungleIntelligence.extensionLanguages[JungleIntelligence.getExtension(p.currentFile)];
     if (!lang) { showConsoleIssues([], p.currentFile); return; }
     let issues = [];
-    try { issues = JungleScanner.scan(lang, p.files[p.currentFile] || ''); } catch (_) {}
+    try { issues = await JungleScanner.scanAsync(lang, p.files[p.currentFile] || ''); } catch (_) {}
     if (typeof JungleAnalyzer !== 'undefined') {
         try { issues.push(...JungleAnalyzer.analyze(lang, p.files, p.currentFile)); } catch (_) {}
     }
@@ -1562,10 +1547,11 @@ window.onload = () => {
     const tools = document.querySelector('.tools-control');
     const container = document.getElementById('editor-container');
     if (!tools || !container) return;
-    tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button>');
+    tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button><button id="workspace-hub-btn" title="Back to project hub" aria-label="Back to project hub">⌂</button>');
     const button = document.getElementById('split-editor-btn');
+    document.getElementById('workspace-hub-btn').onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
     const style = document.createElement('style');
-    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.tools-icon-btn:hover,#split-editor-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-code{position:relative;flex:1;min-height:0}.stacked-code pre,.stacked-code textarea{position:absolute;inset:0;margin:0;padding:12px 20px;box-sizing:border-box;font:14px/22px Fira Code,Consolas,monospace;white-space:pre;tab-size:4}.stacked-code pre{pointer-events:none;overflow:hidden;color:#d1d5db}.stacked-code textarea{resize:none;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:#74a896;overflow:auto}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
+    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn,#workspace-hub-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.tools-icon-btn:hover,#split-editor-btn:hover,#workspace-hub-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-code{position:relative;flex:1;min-height:0}.stacked-code pre,.stacked-code textarea{position:absolute;inset:0;margin:0;padding:12px 20px;box-sizing:border-box;font:14px/22px Fira Code,Consolas,monospace;white-space:pre;tab-size:4}.stacked-code pre{pointer-events:none;overflow:hidden;color:#d1d5db}.stacked-code textarea{resize:none;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:#74a896;overflow:auto}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
     document.head.appendChild(style);
     let focusedPane = 'primary';
     editor.addEventListener('focus', () => { focusedPane = 'primary'; });

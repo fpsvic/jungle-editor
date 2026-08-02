@@ -2,6 +2,7 @@
 (function buildDOM() {
     document.body.innerHTML = `
     <div class="splash-screen" id="splash-screen">
+        <button class="splash-blog-link" id="open-blog-btn" type="button">Blog</button>
         <div class="splash-content">
             <svg class="splash-logo" width="110" height="110" viewBox="0 0 100 100" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -33,6 +34,17 @@
             </button>
         </div>
     </div>
+    <main class="blog-screen" id="blog-screen" aria-labelledby="blog-title">
+        <header class="blog-header"><button id="blog-back-btn" type="button">← Back</button><span>Jungle Editor</span></header>
+        <article class="blog-content">
+            <p class="blog-kicker">ABOUT</p>
+            <h1 id="blog-title">What Jungle Editor is</h1>
+            <p>Jungle editor is a coding sandbox that can be used for small testing, debugging or coding with a broad support of languages. It brings an editor, project files, a preview, a terminal, and guided diagnostics together in one calm workspace, so you can move from an idea to a working experiment without configuring a full development environment first.</p>
+            <section><h2>Made for momentum</h2><p>Use Jungle Editor to try a function, build a small webpage, inspect an error, or learn how a language behaves. Projects stay in your browser and can contain multiple files and folders, while the workspace helps you spot likely syntax, accessibility, quality, and safety issues before you run code.</p></section>
+            <section><h2>More than a text box</h2><p>The editor includes familiar tools such as search and replace, undo and redo, code highlighting, starter templates, a preview for web projects, and a terminal-inspired workspace. Its scanners are designed to explain likely problems in plain language, while real runtimes and compilers can verify runnable code when available.</p></section>
+            <section><h2>Where it fits</h2><p>It is best for learning, prototypes, coding exercises, and focused debugging. Larger production applications still benefit from their normal compiler, test suite, package tooling, and CI checks—but Jungle Editor remains a useful place to isolate an issue and understand it quickly.</p></section>
+        </article>
+    </main>
     <div id="settings-screen">
         <div id="settings-header">
             <button id="settings-back">← Back</button>

@@ -7,6 +7,17 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .splash-screen { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: radial-gradient(circle at center, #101715 0%, #040608 100%); display: flex; flex-direction: column; justify-content: center; align-items: center; z-index: 9999; transition: opacity 0.4s cubic-bezier(0.4, 0, 0.2, 1), visibility 0.4s; opacity: 1; visibility: visible; }
 .splash-screen.fade-out { opacity: 0; visibility: hidden; }
 .splash-content { text-align: center; max-width: 500px; padding: 2rem; display: flex; flex-direction: column; align-items: center; }
+.splash-blog-link { position:absolute; top:26px; right:32px; border:0; background:transparent; color:#aed9cb; font:600 0.95rem Inter,sans-serif; cursor:pointer; padding:8px 12px; border-radius:6px; }
+.splash-blog-link:hover { background:#1c2b25; color:#fff; }
+.blog-screen { position:fixed; inset:0; z-index:10000; display:none; overflow-y:auto; background:radial-gradient(circle at top, #15221d 0%, #06090a 55%); color:#dce9e4; }
+.blog-screen.visible { display:block; }
+.blog-header { position:sticky; top:0; display:flex; justify-content:space-between; align-items:center; padding:20px 7vw; background:rgba(6,9,10,.88); border-bottom:1px solid #263b31; backdrop-filter:blur(12px); color:#aed9cb; font-weight:700; }
+.blog-header button { border:1px solid #415c4f; background:#172420; color:#dce9e4; border-radius:6px; padding:8px 12px; cursor:pointer; font:inherit; }
+.blog-content { max-width:780px; margin:0 auto; padding:82px 28px 130px; font-size:1.12rem; line-height:1.8; }
+.blog-kicker { color:#74a896; letter-spacing:.16em; font-weight:700; font-size:.78rem; }
+.blog-content h1 { margin:0 0 24px; font-size:clamp(2.4rem,7vw,4.9rem); line-height:1.05; color:#eff8f3; letter-spacing:-.055em; }
+.blog-content h2 { margin:92px 0 14px; color:#aed9cb; font-size:1.8rem; }
+.blog-content p { color:#b7c9c1; margin:0; }
 .splash-logo { margin-bottom: 2.5rem; filter: drop-shadow(0 0 25px rgba(116, 168, 147, 0.35)); width: 110px !important; height: 110px !important; flex-shrink: 0 !important; }
 .splash-title { font-family: 'Inter', sans-serif; font-size: 3.5rem; font-weight: 800; margin: 0 0 1rem 0; letter-spacing: -1.5px; color: #e2f1ec; }
 .splash-subtitle { font-size: 1.05rem; color: #7b8e87; margin: 0 0 3rem 0; font-weight: 400; line-height: 1.6; max-width: 440px; }
