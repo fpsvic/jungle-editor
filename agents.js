@@ -1,7 +1,17 @@
 // Jungle Agents: an approval-gated Gemini coding assistant for the active browser project.
 (function initJungleAgents() {
-    const toggle = document.getElementById('agents-toggle-btn');
+    const fallback = document.getElementById('workspace-center-fallback');
+    const primaryToggle = document.getElementById('agents-toggle-btn');
+    const toggle = primaryToggle || document.getElementById('agents-toggle-fallback');
     if (!toggle) return;
+    if (fallback) fallback.style.display = primaryToggle ? 'none' : 'flex';
+    const fallbackHub = document.getElementById('workspace-hub-fallback');
+    if (fallbackHub) fallbackHub.onclick = () => {
+        const workspace = document.getElementById('workspace-container');
+        const hub = document.getElementById('projects-dashboard');
+        if (workspace) workspace.style.display = 'none';
+        if (hub) { hub.classList.add('show'); window.JungleUI?.renderProjectsDashboard?.(); }
+    };
 
     document.body.insertAdjacentHTML('beforeend', `
         <aside class="agent-panel" id="agent-panel" aria-label="Jungle coding agent">

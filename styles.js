@@ -127,6 +127,13 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .action-btn.delete:hover { color: #cf6679; }
 .main-content { flex: 1; display: flex; flex-direction: column; background-color: #0b0d10; position: relative; }
 .editor-header { position:relative; display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background-color: #111413; border-bottom: 1px solid #1c2321; }
+.editor-header .header-right { position:absolute; right:20px; top:8px; z-index:20; display:flex!important; align-items:center; gap:10px; visibility:visible!important; opacity:1!important; }
+.workspace-center-fallback { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:flex; align-items:center; height:34px; border:1px solid #52645d; border-radius:999px; overflow:hidden; background:#101513; z-index:4; box-shadow:0 3px 14px #0005; }
+.workspace-center-fallback button { height:100%; border:0; background:transparent; color:#fff; cursor:pointer; font:600 .9rem Inter,sans-serif; }
+.workspace-center-fallback button:first-child { width:38px; display:grid; place-items:center; border-right:1px solid #35453e; }
+.workspace-center-fallback svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+.workspace-center-fallback button:last-child { padding:0 14px; white-space:nowrap; }
+.workspace-center-fallback:hover { background:#24342e; }
 .editor-header h2 { margin: 0; font-size: 0.95rem; font-weight: 600; color: #aed9cb; }
 #run-fullscreen-btn{position:absolute;top:12px;right:16px;z-index:12;display:none;place-items:center;width:32px;height:32px;background:#161c1a;color:#aed9cb;border:1px solid #528b74;border-radius:6px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,.35)}#run-fullscreen-btn:hover,#run-fullscreen-btn.active{background:#1c3028;color:#fff}#run-fullscreen-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
 .header-left { display: flex; align-items: center; gap: 15px; }

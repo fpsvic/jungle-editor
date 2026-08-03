@@ -179,6 +179,10 @@
                     <button class="exit-hub-btn" id="run-btn" style="background-color: #172420; border-color: #528b74; color: #74a896;" title="Compile and Run Code">▶ Run</button>
                     <button class="exit-hub-btn" id="tab-terminal-btn" title="Open Workspace Console Terminal">🖥️ Terminal Console</button>
                 </div>
+                <div class="workspace-center-fallback" id="workspace-center-fallback">
+                    <button id="agents-toggle-fallback" title="Open Agents" aria-label="Open Agents"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"></circle><circle cx="17" cy="10" r="2.5"></circle><path d="M3.5 19c.5-3.5 2.4-5.2 5.5-5.2s5 1.2 6 4"></path></svg></button>
+                    <button id="workspace-hub-fallback" title="Back to project hub">Back to Hub</button>
+                </div>
             </div>
             <div id="template-panel">
                 <div id="template-panel-body">
