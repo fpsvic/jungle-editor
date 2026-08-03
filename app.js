@@ -1503,6 +1503,9 @@ window.onload = () => {
             map.push({ file, lang: language, folder: file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '' });
             if (issues.length) { results.push({ file: `${file} [${language}]`, lang: language, issues }); total += issues.length; }
         }
+        // Bug-scan mode is temporary. Leaving the class on the body hid the normal
+        // Run/Terminal/Templates toolbar permanently after the first scan.
+        document.body.classList.remove('bug-scan-mode');
         showProjectIssues({ map, results, scanned: map.length, total }); switchView('console');
     };
     toolsBtn.onclick = event => { event.stopPropagation(); const open = !toolsMenu.classList.contains('show'); close(); if (open) { toolsMenu.classList.add('show'); toolsBtn.setAttribute('aria-expanded', 'true'); } };
@@ -1528,6 +1531,7 @@ window.onload = () => {
         JungleStorage.saveProjects(projects);
         if (project.currentFile) { editor.value = project.files[project.currentFile] || ''; JungleUI.updateCodeHighlight(); }
         runBugScan();
+        document.body.classList.remove('bug-scan-mode');
         JungleUI.showToast(fixed ? `Debug verified and applied ${fixed} safe fix${fixed === 1 ? '' : 'es'} across ${checked} file${checked === 1 ? '' : 's'}` : `Debug checked ${checked} file${checked === 1 ? '' : 's'} — no verified safe fixes`);
     };
     document.addEventListener('click', close);
