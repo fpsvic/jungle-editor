@@ -175,7 +175,7 @@
                     </div>
                 </div>
                 <div class="header-right flex items-center gap-2">
-                    <button class="exit-hub-btn" id="template-panel-toggle" title="Show starter templates">⚡ Templates <span id="template-toggle-arrow">▼</span></button>
+                    <button class="template-text-btn" id="template-panel-toggle" title="Show starter templates">Templates</button>
                     <button class="exit-hub-btn" id="run-btn" style="background-color: #172420; border-color: #528b74; color: #74a896;" title="Compile and Run Code">▶ Run</button>
                     <button class="exit-hub-btn" id="tab-terminal-btn" title="Open Workspace Console Terminal">🖥️ Terminal Console</button>
                 </div>

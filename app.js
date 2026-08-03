@@ -905,9 +905,20 @@ main();
         currentFile: 'main.js'
     }
 };
+// Additional templates live in a separate catalog so this controller remains readable.
+Object.assign(TEMPLATES, window.JUNGLE_ADDITIONAL_TEMPLATES || {});
+const BASE_TEMPLATE_META = {
+    web: { name: 'Web Page', desc: 'HTML + CSS + JS starter with a styled counter', icon: '🌐' },
+    python: { name: 'Python Script', desc: 'Functions, FizzBuzz, and a main() entry point', icon: '🐍' },
+    javascript: { name: 'JavaScript App', desc: 'Sorting, async fetch, and modern JS patterns', icon: '⚡' }
+};
+templatePanelBody.innerHTML = Object.entries(TEMPLATES).map(([key, template]) => {
+    const meta = template.meta || BASE_TEMPLATE_META[key] || { name: key, desc: template.lang + ' starter', icon: '📄' };
+    return `<div class="template-card" data-template="${key}"><div class="template-card-icon">${meta.icon}</div><div class="template-card-name">${meta.name}</div><div class="template-card-desc">${meta.desc}</div></div>`;
+}).join('');
 templatePanelToggle.onclick = () => {
     const open = templatePanelBody.classList.toggle('open');
-    templateToggleArrow.textContent = open ? '▲' : '▼';
+    if (templateToggleArrow) templateToggleArrow.textContent = open ? '▲' : '▼';
 };
 function updateTemplateBtnVisibility() {
     const p = JungleUI.getCurrentProject();
@@ -930,7 +941,7 @@ document.querySelectorAll('.template-card').forEach(card => {
         JungleUI.renderFilesList();
         JungleUI.switchToFile(t.currentFile);
         templatePanelBody.classList.remove('open');
-        templateToggleArrow.textContent = '▼';
+        if (templateToggleArrow) templateToggleArrow.textContent = '▼';
         JungleUI.showToast(`Loaded ${card.querySelector('.template-card-name').textContent} template.`);
     };
 });
@@ -1547,11 +1558,12 @@ window.onload = () => {
     const tools = document.querySelector('.tools-control');
     const container = document.getElementById('editor-container');
     if (!tools || !container) return;
-    tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button><button id="workspace-hub-btn" title="Back to project hub" aria-label="Back to project hub">⌂</button>');
+    tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button>');
+    document.querySelector('.editor-header').insertAdjacentHTML('beforeend', '<div id="workspace-center-actions"><button id="agents-toggle-btn" title="Open Agents" aria-label="Open Agents"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3.5 19c.5-3.5 2.4-5.2 5.5-5.2s5 1.7 5.5 5.2M14 15c2.9-.4 5 .9 6 4"/></svg></button><button id="workspace-hub-btn" title="Back to project hub">Back to Hub</button></div>');
     const button = document.getElementById('split-editor-btn');
     document.getElementById('workspace-hub-btn').onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
     const style = document.createElement('style');
-    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn,#workspace-hub-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.tools-icon-btn:hover,#split-editor-btn:hover,#workspace-hub-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-code{position:relative;flex:1;min-height:0}.stacked-code pre,.stacked-code textarea{position:absolute;inset:0;margin:0;padding:12px 20px;box-sizing:border-box;font:14px/22px Fira Code,Consolas,monospace;white-space:pre;tab-size:4}.stacked-code pre{pointer-events:none;overflow:hidden;color:#d1d5db}.stacked-code textarea{resize:none;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:#74a896;overflow:auto}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
+    style.textContent = '#exit-to-hub-header-btn{display:none!important}.tools-control{position:relative;display:flex;align-items:center;margin-left:-8px}.tools-icon-btn,#split-editor-btn{width:24px;height:24px;padding:0;background:transparent;color:#849690;border:0;border-radius:4px;cursor:pointer;font-size:18px;line-height:1}.tools-icon-btn svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}.tools-icon-btn:hover,#split-editor-btn:hover,.tools-icon-btn[aria-expanded="true"]{background:#1c2522;color:#aed9cb}.tools-menu,.bug-language-menu{position:absolute;display:none;top:30px;left:0;z-index:80;background:#161c1a;border:1px solid #2a3d35;border-radius:7px;padding:4px;box-shadow:0 10px 28px #0008}.tools-menu.show,.bug-language-menu.show{display:block}.tools-menu button{width:210px;padding:9px 10px;display:flex;justify-content:space-between;background:none;color:#c8ddd8;border:0;border-radius:4px;text-align:left;cursor:pointer}.tools-menu button:hover,.bug-language-menu button:hover{background:#1c3028;color:#fff}.bug-language-menu{left:218px;max-height:340px;overflow:auto;min-width:190px}.bug-language-menu button{display:block;width:100%;padding:7px 10px;color:#c8ddd8;background:none;border:0;border-radius:4px;text-align:left;cursor:pointer;font:12px monospace}.bug-language-menu button.selected{background:#1c3028;color:#aed9cb}.stacked-pane{position:absolute;left:0;right:0;bottom:0;height:50%;background:#0b0d10;border-top:1px solid #35453e;z-index:5;display:flex;flex-direction:column}.stacked-pane-header{height:28px;display:flex;align-items:center;padding:0 9px;background:#111413;color:#849690;font:12px monospace}.stacked-pane select{margin-left:8px;max-width:260px;background:#161c1a;color:#aed9cb;border:1px solid #35453e;border-radius:3px;font:12px monospace}.stacked-code{position:relative;flex:1;min-height:0}.stacked-code pre,.stacked-code textarea{position:absolute;inset:0;margin:0;padding:12px 20px;box-sizing:border-box;font:14px/22px Fira Code,Consolas,monospace;white-space:pre;tab-size:4}.stacked-code pre{pointer-events:none;overflow:hidden;color:#d1d5db}.stacked-code textarea{resize:none;border:0;outline:0;background:transparent;color:transparent;-webkit-text-fill-color:transparent;caret-color:#74a896;overflow:auto}.split-active #code-editor,.split-active #highlight-overlay{height:50%!important}.bug-scan-mode #tab-preview,.bug-scan-mode #run-btn,.bug-scan-mode #tab-terminal-btn,.bug-scan-mode #template-panel-toggle{display:none!important}.bug-scan-mode .sidebar-tabs{display:grid;grid-template-columns:1fr 1fr}';
     document.head.appendChild(style);
     let focusedPane = 'primary';
     editor.addEventListener('focus', () => { focusedPane = 'primary'; });
