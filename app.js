@@ -778,6 +778,11 @@ projectTitleBtn.onclick = () => {
     const style = document.createElement('style');
     style.textContent = css;
     document.head.appendChild(style);
+    // Keep primary workspace actions discoverable even while a scan or project view
+    // changes body classes. These controls should never disappear from the toolbar.
+    const toolbarVisibilityStyle = document.createElement('style');
+    toolbarVisibilityStyle.textContent = '.editor-header .header-right{display:flex!important;visibility:visible!important;opacity:1!important}.editor-header #template-panel-toggle,.editor-header #run-btn,.editor-header #tab-terminal-btn{display:flex!important;visibility:visible!important;opacity:1!important}.editor-header #workspace-center-actions{display:flex!important;visibility:visible!important;opacity:1!important}.editor-header #workspace-hub-btn{display:block!important;visibility:visible!important;opacity:1!important}';
+    document.head.appendChild(toolbarVisibilityStyle);
 })();
 const langPickerScreen = document.getElementById('lang-picker-screen');
 const langPickerBack = document.getElementById('lang-picker-back');
