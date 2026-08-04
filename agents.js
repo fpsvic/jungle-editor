@@ -134,6 +134,9 @@
         { name: 'delete_file', description: 'Delete a project file. Cannot delete the final file.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
         { name: 'create_folder', description: 'Create a virtual folder in the project.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
         { name: 'delete_folder', description: 'Delete a folder and all project files beneath it.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
+        { name: 'workspace_status', description: 'Inspect the active workspace view, current file, and safe controls the agent can use.', parameters: { type: 'OBJECT', properties: {} } },
+        { name: 'click_workspace_control', description: 'Click one safe, visible Jungle Editor control. Use the canonical control name from workspace_status, such as run, preview_run, terminal, console, templates, agents, stacked_editor, tools, extensions, select_all, copy_code, download_code, or back_to_hub.', parameters: { type: 'OBJECT', properties: { control: { type: 'STRING' } }, required: ['control'] } },
+        { name: 'open_workspace_file', description: 'Open an existing project file in the editor.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
         { name: 'run_terminal', description: 'Request permission to run one Jungle terminal command. Supported commands include ls, cat, head, tail, wc, grep, touch, rm, mv, cp, stat, open, project, analyze, run, node, python, python3, g++, gcc, javac, and tsc.', parameters: { type: 'OBJECT', properties: { command: { type: 'STRING' } }, required: ['command'] } }
     ] }];
 
@@ -154,9 +157,67 @@
         }
     }
 
+    const WORKSPACE_CONTROL_IDS = {
+        run: 'run-btn',
+        preview_run: 'tab-preview',
+        terminal: 'tab-terminal-btn',
+        console: 'tab-console',
+        whole_project: 'project-title-btn',
+        templates: 'template-panel-toggle',
+        agents: 'agents-toggle-btn',
+        stacked_editor: 'split-editor-btn',
+        tools: 'tools-btn',
+        extensions: 'extensions-btn',
+        select_all: 'select-all-code-btn',
+        copy_code: 'header-copy-code-btn',
+        download_code: 'download-code-btn',
+        back_to_hub: 'workspace-hub-btn'
+    };
+
+    function normalizeControlName(value) {
+        return String(value || '').trim().toLowerCase().replace(/[\s\/-]+/g, '_');
+    }
+
+    function findWorkspaceControl(name) {
+        const key = normalizeControlName(name);
+        const id = WORKSPACE_CONTROL_IDS[key];
+        if (!id) throw new Error(`Unknown workspace control: ${name}`);
+        if (key === 'agents') return document.getElementById('agents-toggle-btn') || document.getElementById('agents-toggle-fallback');
+        if (key === 'back_to_hub') return document.getElementById('workspace-hub-btn') || document.getElementById('workspace-hub-fallback');
+        return document.getElementById(id);
+    }
+
+    function workspaceStatus() {
+        const project = JungleUI.getCurrentProject();
+        const controls = Object.keys(WORKSPACE_CONTROL_IDS).map(control => {
+            const element = findWorkspaceControl(control);
+            return { control, available: Boolean(element), visible: Boolean(element && element.getClientRects().length) };
+        });
+        return JSON.stringify({
+            view: typeof activeView === 'string' ? activeView : 'unknown',
+            project: project ? project.name : null,
+            currentFile: project ? project.currentFile : null,
+            controls
+        });
+    }
+
     async function runTool(name, args) {
+        if (name === 'workspace_status') return workspaceStatus();
+        if (name === 'click_workspace_control') {
+            const control = normalizeControlName(args.control);
+            const element = findWorkspaceControl(control);
+            if (!element) throw new Error(`Workspace control is not available: ${control}`);
+            element.click();
+            return `Clicked workspace control: ${control}`;
+        }
         const project = JungleUI.getCurrentProject();
         if (!project) throw new Error('No project is open.');
+        if (name === 'open_workspace_file') {
+            const path = cleanPath(args.path);
+            if (project.files[path] === undefined) throw new Error('File does not exist: ' + path);
+            JungleUI.switchToFile(path);
+            return 'Opened ' + path;
+        }
         if (name === 'create_file') {
             const path = cleanPath(args.path); if (project.files[path] !== undefined) throw new Error('File already exists: ' + path);
             project.files[path] = String(args.content || ''); project.currentFile = path; saveAndRefresh(project, path); return 'Created ' + path;
@@ -206,7 +267,7 @@
         const callIds = new Map();
         const messages = [{
             role: 'system',
-            content: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.'
+            content: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.'
         }];
         contents.forEach(item => {
             const parts = item.parts || [];
@@ -279,7 +340,7 @@
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.value)}:generateContent`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
             body: JSON.stringify({
-                systemInstruction: { parts: [{ text: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.' }] },
+                systemInstruction: { parts: [{ text: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.' }] },
                 contents, tools, generationConfig: { temperature: 0.2 }
             })
         });
