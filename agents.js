@@ -1,4 +1,4 @@
-// Jungle Agents: an approval-gated Gemini coding assistant for the active browser project.
+// Jungle Agents: a direct-access coding assistant for the active browser project.
 (function initJungleAgents() {
     const fallback = document.getElementById('workspace-center-fallback');
     const primaryToggle = document.getElementById('agents-toggle-btn');
@@ -28,11 +28,6 @@
                 <button id="agent-connect-btn" type="button">Connect</button>
             </div>
             <div class="agent-messages" id="agent-messages"><div class="agent-empty">Ask the agent to explain code, fix a bug, or create and edit project files.</div></div>
-            <div class="agent-approval" id="agent-approval">
-                Allow model to run this command in the terminal?
-                <code class="agent-command" id="agent-command"></code>
-                <div class="agent-approval-actions"><button id="agent-deny" type="button">Deny</button><button class="allow" id="agent-allow" type="button">Allow</button></div>
-            </div>
             <div class="agent-composer">
                 <textarea id="agent-input" placeholder="Ask the coding agent to work with your code…"></textarea>
                 <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="gemini-2.5-flash">Gemini 2.5 Flash · API key</option><option value="openai:gpt-4o-mini">OpenAI GPT-4o mini · API key</option></select>
@@ -48,12 +43,8 @@
     const status = document.getElementById('agent-status');
     const connect = document.getElementById('agent-connect');
     const keyInput = document.getElementById('agent-api-key');
-    const approval = document.getElementById('agent-approval');
-    const commandLabel = document.getElementById('agent-command');
     let apiKey = sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '';
     let busy = false;
-    let stopped = false;
-    let approvalResolver = null;
     const conversation = [];
 
     const setConnected = connected => {
@@ -237,7 +228,7 @@
         { name: 'workspace_status', description: 'Inspect the active workspace view, current file, and safe controls the agent can use.', parameters: { type: 'OBJECT', properties: {} } },
         { name: 'click_workspace_control', description: 'Click one safe, visible Jungle Editor control. Use the canonical control name from workspace_status, such as run, preview_run, terminal, console, templates, agents, stacked_editor, tools, extensions, select_all, copy_code, download_code, or back_to_hub.', parameters: { type: 'OBJECT', properties: { control: { type: 'STRING' } }, required: ['control'] } },
         { name: 'open_workspace_file', description: 'Open an existing project file in the editor.', parameters: { type: 'OBJECT', properties: { path: { type: 'STRING' } }, required: ['path'] } },
-        { name: 'run_terminal', description: 'Request permission to run one Jungle terminal command. Supported commands include ls, cat, head, tail, wc, grep, touch, rm, mv, cp, stat, open, project, analyze, run, node, python, python3, g++, gcc, javac, and tsc.', parameters: { type: 'OBJECT', properties: { command: { type: 'STRING' } }, required: ['command'] } }
+        { name: 'run_terminal', description: 'Run a Jungle terminal command immediately. The command operates in the active in-browser project workspace. Supported commands include ls, cat, head, tail, wc, grep, touch, rm, mv, cp, stat, open, project, analyze, run, node, python, python3, g++, gcc, javac, and tsc.', parameters: { type: 'OBJECT', properties: { command: { type: 'STRING' } }, required: ['command'] } }
     ] }];
 
     function cleanPath(value) {
@@ -344,8 +335,6 @@
         }
         if (name === 'run_terminal') {
             const command = String(args.command || '').trim(); if (!command) throw new Error('Empty terminal command.');
-            const allowed = await requestTerminalApproval(command);
-            if (!allowed) { stopped = true; throw new Error('Terminal command denied. Agent stopped.'); }
             switchView('terminal', false);
             const before = terminalViewBody.textContent.length;
             executeTerminalCommand(command);
@@ -354,20 +343,11 @@
         throw new Error('Unknown tool: ' + name);
     }
 
-    function requestTerminalApproval(command) {
-        commandLabel.textContent = command;
-        approval.classList.add('show');
-        messages.scrollTop = messages.scrollHeight;
-        return new Promise(resolve => { approvalResolver = resolve; });
-    }
-    document.getElementById('agent-allow').onclick = () => { approval.classList.remove('show'); approvalResolver?.(true); approvalResolver = null; };
-    document.getElementById('agent-deny').onclick = () => { approval.classList.remove('show'); approvalResolver?.(false); approvalResolver = null; };
-
     function openAiMessages(contents) {
         const callIds = new Map();
         const messages = [{
             role: 'system',
-            content: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.'
+            content: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal when execution or inspection is useful; it runs immediately in the active in-browser workspace. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.'
         }];
         contents.forEach(item => {
             const parts = item.parts || [];
@@ -444,7 +424,7 @@
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.value)}:generateContent`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
             body: JSON.stringify({
-                systemInstruction: { parts: [{ text: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.' }] },
+                systemInstruction: { parts: [{ text: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal when execution or inspection is useful; it runs immediately in the active in-browser workspace. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.' }] },
                 contents, tools, generationConfig: { temperature: 0.2 }
             })
         });
@@ -468,13 +448,13 @@
             keyInput.focus();
             return;
         }
-        busy = true; stopped = false; input.value = ''; input.disabled = send.disabled = true; status.textContent = 'Working';
+        busy = true; input.value = ''; input.disabled = send.disabled = true; status.textContent = 'Working';
         addMessage('user', prompt);
         const contents = conversation.slice(-12).map(item => ({ role: item.role, parts: [{ text: item.text }] }));
         contents.push({ role: 'user', parts: [{ text: `${prompt}\n\nCURRENT PROJECT SNAPSHOT:\n${projectSnapshot()}` }] });
         try {
             let finalText = '';
-            for (let round = 0; round < 12 && !stopped; round++) {
+            for (let round = 0; round < 12; round++) {
                 const content = await callModel(contents);
                 contents.push(content);
                 const calls = (content.parts || []).filter(part => part.functionCall).map(part => part.functionCall);
@@ -489,7 +469,6 @@
                         responses.push({ functionResponse: { name: call.name, id: call.id, response: { result } } });
                     } catch (error) {
                         responses.push({ functionResponse: { name: call.name, id: call.id, response: { error: error.message } } });
-                        if (stopped) throw error;
                     }
                 }
                 contents.push({ role: 'user', parts: responses });
@@ -499,7 +478,7 @@
             conversation.push({ role: 'user', text: prompt }, { role: 'model', text: finalText });
         } catch (error) {
             if (error.auth) { apiKey = ''; sessionStorage.removeItem('jungle_agent_api_key'); sessionStorage.removeItem('jungle_gemini_api_key'); setConnected(false); }
-            addMessage('system', stopped ? 'Agent stopped because the terminal command was denied.' : 'Agent error: ' + error.message);
+            addMessage('system', 'Agent error: ' + error.message);
         } finally {
             busy = false; input.disabled = send.disabled = false; setConnected(Boolean(apiKey)); input.focus();
         }

@@ -55,12 +55,6 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .agent-message.user { align-self:flex-end; background:#28463a; color:#f1f8f5; border-bottom-right-radius:3px; }
 .agent-message.model { align-self:flex-start; background:#171f1c; color:#cbd9d3; border:1px solid #26352f; border-bottom-left-radius:3px; }
 .agent-message.system { align-self:center; max-width:96%; background:transparent; color:#74a896; font-size:11px; text-align:center; }
-.agent-approval { display:none; margin:0 12px 8px; padding:11px; border:1px solid #805e2e; border-radius:9px; background:#201a10; color:#e7d1ab; font-size:.76rem; }
-.agent-approval.show { display:block; }
-.agent-command { display:block; margin:7px 0 9px; padding:7px; overflow:auto; background:#090b0a; color:#f0c77b; border-radius:5px; font:11px Fira Code,monospace; }
-.agent-approval-actions { display:flex; justify-content:flex-end; gap:7px; }
-.agent-approval button { border:1px solid #73552d; border-radius:5px; padding:5px 11px; cursor:pointer; color:#eee; background:#2c2519; }
-.agent-approval .allow { background:#315941; border-color:#4d8163; }
 .agent-composer { flex-shrink:0; padding:10px; display:grid; grid-template-columns:1fr auto; gap:8px; border-top:1px solid #26352f; background:#101613; }
 .agent-composer textarea { grid-column:1/-1; min-height:58px; max-height:130px; resize:vertical; box-sizing:border-box; border:1px solid #354a41; border-radius:8px; background:#080c0a; color:#e8f2ee; padding:9px; outline:none; font:12px/1.45 Inter,sans-serif; }
 .agent-model { min-width:0; border:1px solid #354a41; border-radius:7px; background:#151e1a; color:#d5e3dd; padding:7px; font-size:.75rem; }
