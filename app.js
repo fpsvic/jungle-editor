@@ -674,7 +674,7 @@ function runWebPreview(entryFile) {
 }
 runBtn.onclick = () => {
     const p = JungleUI.getCurrentProject();
-    if (!p) return;
+    if (!p) { JungleUI.showToast('Open a project before running code.'); return; }
     const lang = selectedLanguages[0];
     const entry = webEntryFile(p, lang);
     if (entry) {
@@ -1556,9 +1556,13 @@ window.onload = () => {
     const runCurrentLanguage = runBtn.onclick;
     runBtn.onclick = async () => {
         if (selectedLanguages.length < 2) return runCurrentLanguage();
-        const project = JungleUI.getCurrentProject(); if (!project || !project.currentFile) return;
+        const project = JungleUI.getCurrentProject();
+        if (!project || !project.currentFile) { JungleUI.showToast('Open a project before running code.'); return; }
         for (const language of selectedLanguages) await JungleRunner.execute(language, project.files[project.currentFile] || '', project.files);
     };
+    // Keep the sidebar Preview / Run tab wired to the current Run handler,
+    // including multi-language projects and the immediate terminal feedback.
+    tabPreview.onclick = () => runBtn.click();
 })();
 
 // Stacked split editor: the original editor stays in the upper half and a second,
@@ -1566,13 +1570,15 @@ window.onload = () => {
 (function initStackedSplitEditor() {
     const tools = document.querySelector('.tools-control');
     const container = document.getElementById('editor-container');
-    if (!tools || !container) return;
-    tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button>');
+    const button = document.getElementById('split-editor-btn') || (tools ? (() => {
+        tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" type="button" title="Toggle stacked editor" aria-label="Toggle stacked editor" aria-pressed="false">↕</button>');
+        return document.getElementById('split-editor-btn');
+    })() : null);
+    if (!container || !button) return;
     const editorHeader = document.querySelector('.editor-header');
     if (editorHeader && !document.getElementById('workspace-center-actions')) {
         editorHeader.insertAdjacentHTML('beforeend', '<div id="workspace-center-actions"><button id="agents-toggle-btn" title="Open Agents" aria-label="Open Agents"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3.5 19c.5-3.5 2.4-5.2 5.5-5.2s5 1.7 5.5 5.2M14 15c2.9-.4 5 .9 6 4"/></svg></button><button id="workspace-hub-btn" title="Back to project hub">Back to Hub</button></div>');
     }
-    const button = document.getElementById('split-editor-btn');
     const hubButton = document.getElementById('workspace-hub-btn');
     if (hubButton) hubButton.onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
     const fallbackHub = document.getElementById('workspace-hub-fallback');
@@ -1597,11 +1603,18 @@ window.onload = () => {
         }
         return switchPrimaryFile(filename);
     };
-    const closeSplit = () => { container.querySelector('.stacked-pane')?.remove(); container.classList.remove('split-active'); button.classList.remove('active'); };
+    const closeSplit = () => {
+        container.querySelector('.stacked-pane')?.remove();
+        container.classList.remove('split-active');
+        button.classList.remove('active');
+        button.setAttribute('aria-pressed', 'false');
+    };
     button.onclick = () => {
         if (container.classList.contains('split-active')) return closeSplit();
-        const project = JungleUI.getCurrentProject(); if (!project) return;
-        const files = Object.keys(project.files); if (!files.length) return;
+        const project = JungleUI.getCurrentProject();
+        if (!project) { JungleUI.showToast('Open a project before opening a second editor.'); return; }
+        const files = Object.keys(project.files || {});
+        if (!files.length) { JungleUI.showToast('Add a file before opening a second editor.'); return; }
         const other = files.find(file => file !== project.currentFile) || project.currentFile;
         const pane = document.createElement('section'); pane.className = 'stacked-pane';
         pane.innerHTML = '<div class="stacked-pane-header">Second editor <select></select></div><div class="stacked-code"><pre></pre><textarea spellcheck="false"></textarea></div>';
@@ -1613,6 +1626,10 @@ window.onload = () => {
         textarea.addEventListener('focus', () => { focusedPane = 'secondary'; });
         textarea.onscroll = () => { overlay.scrollTop = textarea.scrollTop; overlay.scrollLeft = textarea.scrollLeft; };
         textarea.onkeydown = event => { if (event.key === 'Tab') { event.preventDefault(); const start = textarea.selectionStart; textarea.setRangeText('    ', start, textarea.selectionEnd, 'end'); textarea.dispatchEvent(new Event('input')); } };
-        refresh(); container.appendChild(pane); container.classList.add('split-active'); button.classList.add('active');
+        refresh();
+        container.appendChild(pane);
+        container.classList.add('split-active');
+        button.classList.add('active');
+        button.setAttribute('aria-pressed', 'true');
     };
 })();

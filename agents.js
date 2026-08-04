@@ -18,13 +18,13 @@
             <div class="agent-resize-handle" id="agent-resize-handle" title="Drag to resize"></div>
             <div class="agent-header">
                 <span>Agents</span>
-                <span class="agent-status" id="agent-status">Not connected</span>
+                <button class="agent-status agent-connect-link" id="agent-status" type="button">Connect API key</button>
                 <button id="agent-expand" title="Extend upward" aria-label="Extend agent panel upward">↑</button>
                 <button id="agent-close" title="Close" aria-label="Close agent panel">×</button>
             </div>
-            <div class="agent-connect" id="agent-connect">
-                <p>Connect a Gemini API key. The key stays in this browser tab and is sent only to Google's Gemini API.</p>
-                <input id="agent-api-key" type="password" placeholder="Gemini API key" autocomplete="off">
+            <div class="agent-connect hidden" id="agent-connect" aria-hidden="true">
+                <p>Enter an API key for the selected model. The key stays in this browser tab.</p>
+                <input id="agent-api-key" type="password" placeholder="enter a API key" autocomplete="off">
                 <button id="agent-connect-btn" type="button">Connect</button>
             </div>
             <div class="agent-messages" id="agent-messages"><div class="agent-empty">Ask the agent to explain code, fix a bug, or create and edit project files.</div></div>
@@ -34,8 +34,8 @@
                 <div class="agent-approval-actions"><button id="agent-deny" type="button">Deny</button><button class="allow" id="agent-allow" type="button">Allow</button></div>
             </div>
             <div class="agent-composer">
-                <textarea id="agent-input" placeholder="Ask Gemini to work with your code…"></textarea>
-                <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="gemini-3.5-flash">Gemini 3.5 Flash · Free API</option></select>
+                <textarea id="agent-input" placeholder="Ask the coding agent to work with your code…"></textarea>
+                <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="gemini-3.5-flash">Gemini 3.5 Flash · Free API</option><option value="openai:gpt-4o-mini">OpenAI GPT-4o mini · API key</option></select>
                 <button class="agent-send" id="agent-send" type="button">Send</button>
             </div>
         </aside>`);
@@ -50,24 +50,33 @@
     const keyInput = document.getElementById('agent-api-key');
     const approval = document.getElementById('agent-approval');
     const commandLabel = document.getElementById('agent-command');
-    let apiKey = sessionStorage.getItem('jungle_gemini_api_key') || '';
+    let apiKey = sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '';
     let busy = false;
     let stopped = false;
     let approvalResolver = null;
     const conversation = [];
 
     const setConnected = connected => {
-        connect.classList.toggle('hidden', connected);
-        status.textContent = connected ? 'Gemini connected' : 'Not connected';
+        // Keep the key field collapsed until the user explicitly opens it.
+        connect.classList.add('hidden');
+        connect.setAttribute('aria-hidden', 'true');
+        status.textContent = connected ? 'API key connected' : 'Connect API key';
+        status.setAttribute('aria-label', connected ? 'Change API key' : 'Connect API key');
     };
     setConnected(Boolean(apiKey));
 
     toggle.onclick = () => {
         panel.classList.toggle('open');
         toggle.classList.toggle('active', panel.classList.contains('open'));
-        if (panel.classList.contains('open')) setTimeout(() => (apiKey ? input : keyInput).focus(), 30);
+        if (panel.classList.contains('open') && apiKey) setTimeout(() => input.focus(), 30);
     };
     document.getElementById('agent-close').onclick = () => { panel.classList.remove('open'); toggle.classList.remove('active'); };
+    status.onclick = () => {
+        const open = connect.classList.contains('hidden');
+        connect.classList.toggle('hidden', open);
+        connect.setAttribute('aria-hidden', String(open));
+        if (!open) setTimeout(() => keyInput.focus(), 30);
+    };
     document.getElementById('agent-expand').onclick = event => {
         panel.classList.toggle('expanded');
         event.currentTarget.textContent = panel.classList.contains('expanded') ? '↓' : '↑';
@@ -77,10 +86,11 @@
         const value = keyInput.value.trim();
         if (!value) return;
         apiKey = value;
-        sessionStorage.setItem('jungle_gemini_api_key', apiKey);
+        sessionStorage.setItem('jungle_agent_api_key', apiKey);
+        sessionStorage.removeItem('jungle_gemini_api_key');
         keyInput.value = '';
         setConnected(true);
-        addMessage('system', 'Gemini connected for this browser tab.');
+        addMessage('system', 'API key connected for this browser tab.');
         input.focus();
     };
 
@@ -192,6 +202,79 @@
     document.getElementById('agent-allow').onclick = () => { approval.classList.remove('show'); approvalResolver?.(true); approvalResolver = null; };
     document.getElementById('agent-deny').onclick = () => { approval.classList.remove('show'); approvalResolver?.(false); approvalResolver = null; };
 
+    function openAiMessages(contents) {
+        const callIds = new Map();
+        const messages = [{
+            role: 'system',
+            content: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use run_terminal only when execution or inspection is genuinely useful; it always requires user approval. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.'
+        }];
+        contents.forEach(item => {
+            const parts = item.parts || [];
+            const responses = parts.filter(part => part.functionResponse).map(part => part.functionResponse);
+            if (responses.length) {
+                responses.forEach(response => messages.push({
+                    role: 'tool',
+                    tool_call_id: response.id || callIds.get(response.name) || response.name,
+                    content: JSON.stringify(response.response || {})
+                }));
+                return;
+            }
+            if (item.role === 'model') {
+                const text = parts.filter(part => part.text).map(part => part.text).join('\n');
+                const calls = parts.filter(part => part.functionCall).map(part => {
+                    const call = part.functionCall;
+                    const id = call.id || `${call.name}-${callIds.size + 1}`;
+                    callIds.set(call.name, id);
+                    return { id, type: 'function', function: { name: call.name, arguments: JSON.stringify(call.args || {}) } };
+                });
+                messages.push({ role: 'assistant', content: text || null, ...(calls.length ? { tool_calls: calls } : {}) });
+                return;
+            }
+            const text = parts.filter(part => part.text).map(part => part.text).join('\n');
+            if (text) messages.push({ role: 'user', content: text });
+        });
+        return messages;
+    }
+
+    function openAiSchema(value) {
+        if (Array.isArray(value)) return value.map(openAiSchema);
+        if (!value || typeof value !== 'object') return value;
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'type' && typeof item === 'string' ? item.toLowerCase() : openAiSchema(item)]));
+    }
+
+    async function callOpenAI(contents) {
+        const modelName = model.value.slice('openai:'.length) || 'gpt-4o-mini';
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+            body: JSON.stringify({
+                model: modelName,
+                messages: openAiMessages(contents),
+                tools: tools[0].functionDeclarations.map(declaration => ({
+                    type: 'function',
+                    function: { ...declaration, parameters: openAiSchema(declaration.parameters) }
+                })),
+                temperature: 0.2
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error?.message || `OpenAI request failed (${response.status})`);
+        const message = data.choices?.[0]?.message;
+        if (!message) throw new Error('OpenAI returned no response.');
+        const parts = [];
+        if (message.content) parts.push({ text: message.content });
+        (message.tool_calls || []).forEach(call => {
+            let args = {};
+            try { args = JSON.parse(call.function?.arguments || '{}'); } catch (_) {}
+            parts.push({ functionCall: { id: call.id, name: call.function?.name, args } });
+        });
+        return { role: 'model', parts };
+    }
+
+    async function callModel(contents) {
+        return model.value.startsWith('openai:') ? callOpenAI(contents) : callGemini(contents);
+    }
+
     async function callGemini(contents) {
         const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.value)}:generateContent`, {
             method: 'POST', headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
@@ -210,7 +293,12 @@
     async function submit() {
         const prompt = input.value.trim();
         if (!prompt || busy) return;
-        if (!apiKey) { connect.classList.remove('hidden'); keyInput.focus(); return; }
+        if (!apiKey) {
+            connect.classList.remove('hidden');
+            connect.setAttribute('aria-hidden', 'false');
+            keyInput.focus();
+            return;
+        }
         busy = true; stopped = false; input.value = ''; input.disabled = send.disabled = true; status.textContent = 'Working';
         addMessage('user', prompt);
         const contents = conversation.slice(-12).map(item => ({ role: item.role, parts: [{ text: item.text }] }));
@@ -218,7 +306,7 @@
         try {
             let finalText = '';
             for (let round = 0; round < 12 && !stopped; round++) {
-                const content = await callGemini(contents);
+                const content = await callModel(contents);
                 contents.push(content);
                 const calls = (content.parts || []).filter(part => part.functionCall).map(part => part.functionCall);
                 const text = (content.parts || []).filter(part => part.text).map(part => part.text).join('\n').trim();
@@ -229,9 +317,9 @@
                     try {
                         const result = await runTool(call.name, call.args || {});
                         addMessage('system', result);
-                        responses.push({ functionResponse: { name: call.name, response: { result } } });
+                        responses.push({ functionResponse: { name: call.name, id: call.id, response: { result } } });
                     } catch (error) {
-                        responses.push({ functionResponse: { name: call.name, response: { error: error.message } } });
+                        responses.push({ functionResponse: { name: call.name, id: call.id, response: { error: error.message } } });
                         if (stopped) throw error;
                     }
                 }
@@ -241,10 +329,10 @@
             addMessage('model', finalText);
             conversation.push({ role: 'user', text: prompt }, { role: 'model', text: finalText });
         } catch (error) {
-            if (/API key|permission|unauthenticated/i.test(error.message)) { apiKey = ''; sessionStorage.removeItem('jungle_gemini_api_key'); setConnected(false); }
+            if (/API key|permission|unauthenticated/i.test(error.message)) { apiKey = ''; sessionStorage.removeItem('jungle_agent_api_key'); sessionStorage.removeItem('jungle_gemini_api_key'); setConnected(false); }
             addMessage('system', stopped ? 'Agent stopped because the terminal command was denied.' : 'Agent error: ' + error.message);
         } finally {
-            busy = false; input.disabled = send.disabled = false; status.textContent = apiKey ? 'Gemini connected' : 'Not connected'; input.focus();
+            busy = false; input.disabled = send.disabled = false; setConnected(Boolean(apiKey)); input.focus();
         }
     }
 

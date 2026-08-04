@@ -69,6 +69,12 @@ class JungleRunner {
         try {
             const p0 = JungleUI.getCurrentProject();
             const fname = (p0 && p0.currentFile) || 'file';
+            // Give immediate feedback before any AST/parser or network-backed scan runs.
+            // A slow scanner must never make Run look like a dead button.
+            switchView('terminal', false);
+            terminalStatus.textContent = 'STARTING';
+            terminalStatus.className = 'text-[#74a896] font-bold animate-pulse';
+            terminalViewBody.textContent = `Preparing ${lang}...`;
             // Merge sibling files of the same language into one bundle for execution
             const bundled = this.bundleFiles(lang, code, files, fname);
             // Scanners/analyzers can be disabled in Settings — then we skip all pre-run checks
@@ -76,7 +82,12 @@ class JungleRunner {
             const analysisOn = (typeof JungleSettings === 'undefined') || !JungleSettings.get('disableAnalysis');
             if (analysisOn) {
                 // Regex scanner (current file) + semantic analyzer (project-wide, cross-file).
-                const scanIssues = await JungleScanner.scanAsync(lang, code);
+                let analysisTimedOut = false;
+                const scanIssues = await Promise.race([
+                    Promise.resolve().then(() => JungleScanner.scanAsync(lang, code)).catch(() => []),
+                    new Promise(resolve => setTimeout(() => { analysisTimedOut = true; resolve([]); }, 2000))
+                ]);
+                if (analysisTimedOut) terminalViewBody.textContent = `Running ${lang}...\n   Static analysis is still loading in the background.`;
                 if (typeof JungleAnalyzer !== 'undefined') {
                     try { scanIssues.push(...JungleAnalyzer.analyze(lang, files || { [fname]: code }, fname)); } catch (_) {}
                 }

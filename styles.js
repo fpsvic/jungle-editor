@@ -40,6 +40,8 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .agent-resize-handle::after { content:''; display:block; width:44px; height:3px; margin:2px auto; border-radius:4px; background:#3c5249; }
 .agent-header { height:43px; padding:0 12px; display:flex; align-items:center; gap:9px; flex-shrink:0; border-bottom:1px solid #26352f; color:#e8f2ee; font-weight:700; }
 .agent-header .agent-status { margin-left:auto; color:#74a896; font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; }
+.agent-header button.agent-connect-link { width:auto; height:auto; margin-left:auto; padding:3px 0; color:#74a896; font:600 .68rem Inter,sans-serif; text-transform:uppercase; letter-spacing:.08em; }
+.agent-header button.agent-connect-link:hover { background:transparent; color:#fff; text-decoration:underline; }
 .agent-header button { width:28px; height:28px; border:0; border-radius:5px; background:transparent; color:#91a59c; cursor:pointer; font-size:17px; }
 .agent-header button:hover { background:#1d2a25; color:#fff; }
 .agent-connect { padding:14px; display:grid; grid-template-columns:1fr auto; gap:8px; border-bottom:1px solid #26352f; background:#111815; }
