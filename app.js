@@ -1568,9 +1568,13 @@ window.onload = () => {
     const container = document.getElementById('editor-container');
     if (!tools || !container) return;
     tools.insertAdjacentHTML('afterend', '<button id="split-editor-btn" title="Toggle stacked editor" aria-label="Toggle stacked editor">↕</button>');
-    document.querySelector('.editor-header').insertAdjacentHTML('beforeend', '<div id="workspace-center-actions"><button id="agents-toggle-btn" title="Open Agents" aria-label="Open Agents"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3.5 19c.5-3.5 2.4-5.2 5.5-5.2s5 1.7 5.5 5.2M14 15c2.9-.4 5 .9 6 4"/></svg></button><button id="workspace-hub-btn" title="Back to project hub">Back to Hub</button></div>');
+    const editorHeader = document.querySelector('.editor-header');
+    if (editorHeader && !document.getElementById('workspace-center-actions')) {
+        editorHeader.insertAdjacentHTML('beforeend', '<div id="workspace-center-actions"><button id="agents-toggle-btn" title="Open Agents" aria-label="Open Agents"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><circle cx="17" cy="10" r="2.5"/><path d="M3.5 19c.5-3.5 2.4-5.2 5.5-5.2s5 1.7 5.5 5.2M14 15c2.9-.4 5 .9 6 4"/></svg></button><button id="workspace-hub-btn" title="Back to project hub">Back to Hub</button></div>');
+    }
     const button = document.getElementById('split-editor-btn');
-    document.getElementById('workspace-hub-btn').onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
+    const hubButton = document.getElementById('workspace-hub-btn');
+    if (hubButton) hubButton.onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
     const fallbackHub = document.getElementById('workspace-hub-fallback');
     if (fallbackHub) fallbackHub.onclick = () => { workspaceContainer.style.display = 'none'; projectsDashboard.classList.add('show'); JungleUI.renderProjectsDashboard(); };
     const style = document.createElement('style');

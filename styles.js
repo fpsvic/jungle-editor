@@ -125,7 +125,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .action-btn { background: none; border: none; color: #5c6875; cursor: pointer; padding: 0 2px; font-size: 0.85rem; transition: color 0.15s, transform 0.1s; }
 .action-btn:hover { color: #ffffff; transform: scale(1.15); }
 .action-btn.delete:hover { color: #cf6679; }
-.main-content { flex: 1; display: flex; flex-direction: column; background-color: #0b0d10; position: relative; }
+.main-content { flex: 1; min-width: 0; display: flex; flex-direction: column; background-color: #0b0d10; position: relative; }
 .editor-header { position:relative; display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; background-color: #111413; border-bottom: 1px solid #1c2321; }
 .editor-header .header-right { position:absolute; right:20px; top:8px; z-index:20; display:flex!important; align-items:center; gap:10px; visibility:visible!important; opacity:1!important; }
 .workspace-center-fallback { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); display:flex; align-items:center; height:34px; border:1px solid #52645d; border-radius:999px; overflow:hidden; background:#101513; z-index:4; box-shadow:0 3px 14px #0005; }
@@ -161,7 +161,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .lang-picker-icon { font-size: 2rem; line-height: 1; }
 .lang-picker-name { font-size: 0.92rem; font-weight: 800; color: #aed9cb; text-align: center; }
 .lang-picker-description { font-size: 0.72rem; line-height: 1.35; color: #7f9c90; text-align: center; }
-.editor-wrapper { display: flex; flex: 1; position: relative; overflow: hidden; background-color: #0b0d10; }
+.editor-wrapper { display: flex; flex: 1; min-width: 0; position: relative; overflow: hidden; background-color: #0b0d10; }
 #line-gutter { padding: 20px 10px 20px 15px; background-color: #080a0d; color: #35453e; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; text-align: right; user-select: none; border-right: 1px solid #1c2321; min-width: 45px; white-space: pre; overflow: hidden; box-sizing: border-box; }
 #editor-container { position: relative; flex: 1; height: 100%; overflow: hidden; }
 #highlight-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: 20px; box-sizing: border-box; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; white-space: pre; overflow: hidden; pointer-events: none; color: #d1d5db; background: transparent; z-index: 1; tab-size: 4; word-wrap: normal; }
@@ -198,8 +198,8 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .modal-btn.cancel:hover { background-color: #232d2a; color: #ffffff; }
 .modal-btn.confirm { background-color: #4b7a69; color: #ffffff; }
 .modal-btn.confirm:hover { background-color: #385c4f; }
-#template-panel { display: flex; flex-direction: column; flex-shrink: 0; }
-#template-panel-body { display: flex; gap: 12px; background-color: #0d1210; border-bottom: 1px solid #1c2321; overflow-x: auto; max-height: 0; overflow: hidden; transition: max-height 0.3s cubic-bezier(0.4,0,0.2,1), padding 0.3s; padding: 0 16px; }
+#template-panel { display: flex; flex-direction: column; flex-shrink: 0; width: 100%; max-width: 100%; min-width: 0; box-sizing: border-box; }
+#template-panel-body { display: flex; gap: 12px; width: 100%; min-width: 0; box-sizing: border-box; background-color: #0d1210; border-bottom: 1px solid #1c2321; overflow-x: auto; max-height: 0; overflow-y: hidden; transition: max-height 0.3s cubic-bezier(0.4,0,0.2,1), padding 0.3s; padding: 0 16px; }
 #template-panel-body.open { max-height: 190px; padding: 14px 16px; overflow-x:auto; overflow-y:hidden; }
 .template-card { flex: 0 0 180px; background-color: #111a17; border: 1px solid #1c2321; border-radius: 10px; padding: 14px; cursor: pointer; transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s; }
 .template-card:hover { border-color: #528b74; transform: translateY(-2px); box-shadow: 0 6px 20px rgba(82,139,116,0.2); }
