@@ -378,7 +378,11 @@ class JungleUI {
         manualLanguageOverride = false;
         p.currentFile = filename;
         currentFileLabel.textContent = filename;
-        editor.value = p.files[filename] || '';
+        if (typeof jungleTextEngine !== 'undefined' && jungleTextEngine?.setDocument) {
+            jungleTextEngine.setDocument(p.files[filename] || '');
+        } else {
+            editor.value = p.files[filename] || '';
+        }
         document.querySelectorAll('#file-list li[data-file]').forEach(item => {
             if (item.dataset.file === filename) item.classList.add('active');
             else item.classList.remove('active');

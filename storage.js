@@ -11,7 +11,8 @@ class JungleSettings {
         buttonOutlines: true,
         textPalette: 'jungle',
         compactUI: false,
-        reduceMotion: false
+        reduceMotion: false,
+        githubPlugin: false
     };
     static _cache = null;
     static all() {

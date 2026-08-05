@@ -284,6 +284,65 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .plugin-card-title { color: #e2f1ec; font-weight: 700; font-size: .95rem; margin-bottom: 4px; }
 .plugin-card-desc { color: #7b8e87; line-height: 1.5; font-size: .81rem; }
 .plugin-status { flex-shrink: 0; padding: 5px 9px; border-radius: 999px; color: #9bd6bc; background: rgba(47,106,82,.22); border: 1px solid #315c49; font-size: .7rem; font-weight: 700; text-transform: uppercase; letter-spacing: .6px; }
+.github-repo-menu { position:absolute; display:none; top:30px; left:218px; z-index:82; width:min(330px,calc(100vw - 30px)); max-height:min(460px,calc(100vh - 80px)); overflow:auto; padding:8px; box-sizing:border-box; background:#161c1a; border:1px solid #2a3d35; border-radius:9px; box-shadow:0 12px 32px #000b; }
+.github-repo-menu.show { display:block; }
+.github-repo-head { display:flex; align-items:center; gap:7px; padding:3px 3px 8px; color:#aed9cb; border-bottom:1px solid #2a3d35; font-size:.75rem; font-weight:700; }
+.github-repo-head span { min-width:0; flex:1; }
+.github-repo-action { border:1px solid #354a41; border-radius:5px; background:#111815; color:#9fc8ba; padding:4px 6px; cursor:pointer; font-size:.68rem; }
+.github-repo-action:hover { background:#24342e; color:#fff; }
+.github-repo-state { padding:14px 7px; color:#849690; font-size:.75rem; line-height:1.45; }
+.github-repo-error { color:#ff9d91; }
+.github-repo-item { width:100%; display:flex; align-items:center; gap:7px; padding:8px 7px; border:0; border-radius:6px; background:transparent; color:#c8ddd8; text-align:left; cursor:pointer; }
+.github-repo-item:hover { background:#1c3028; color:#fff; }
+.github-repo-item strong { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.76rem; }
+.github-repo-item small { color:#789087; font-size:.65rem; white-space:nowrap; }
+.github-modal-overlay { position:fixed; inset:0; z-index:10020; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.78); backdrop-filter:blur(5px); }
+.github-modal-overlay.show { display:flex; }
+.github-modal { width:min(470px,100%); box-sizing:border-box; padding:24px; border:1px solid #3d574c; border-radius:13px; background:#111816; color:#dce9e4; box-shadow:0 20px 65px #000c; }
+.github-modal h3 { margin:0 0 10px; color:#aed9cb; font-size:1.1rem; }
+.github-modal p { margin:0 0 16px; color:#9cafa5; font-size:.84rem; line-height:1.55; }
+.github-modal label { display:block; margin:0 0 6px; color:#aed9cb; font-size:.75rem; font-weight:700; }
+.github-modal input { width:100%; box-sizing:border-box; padding:10px 11px; border:1px solid #354a41; border-radius:7px; background:#080c0a; color:#eef8f4; outline:none; font:12px Fira Code,monospace; }
+.github-modal input:focus { border-color:#74a896; box-shadow:0 0 0 2px rgba(116,168,150,.15); }
+.github-modal-help { margin-top:8px!important; margin-bottom:0!important; font-size:.72rem!important; color:#789087!important; }
+.github-modal-help a { color:#9bd6bc; }
+.github-modal-actions { display:flex; justify-content:flex-end; gap:9px; margin-top:20px; }
+.github-modal-actions button { padding:8px 14px; border-radius:7px; border:1px solid #354a41; background:#172420; color:#c8ddd8; cursor:pointer; font-weight:700; }
+.github-modal-actions button:hover { background:#24342e; color:#fff; }
+.github-modal-actions .github-allow { border-color:#4e7564; background:#274639; color:#fff; }
+.github-modal-actions .github-allow:hover { background:#35614e; }
+.github-modal-actions button:disabled { opacity:.55; cursor:wait; }
+.github-modal-status { min-height:1.2em; margin-top:12px!important; margin-bottom:0!important; color:#ffb86c!important; font-size:.76rem!important; }
+body.theme-light .github-repo-menu { background:#f6f8fa; border-color:#cbd2d8; box-shadow:0 12px 32px #0003; }
+body.theme-light .github-repo-head { color:#111; border-color:#dfe4e8; }
+body.theme-light .github-repo-action { background:#fff; border-color:#cbd2d8; color:#333; }
+body.theme-light .github-repo-state { color:#5a6570; }
+body.theme-light .github-repo-item { color:#333; }
+body.theme-light .github-repo-item:hover { background:#e2eee8; color:#111; }
+body.theme-light .github-repo-item small { color:#66736d; }
+body.theme-light .github-modal { background:#fff; color:#111; border-color:#aaa; box-shadow:0 20px 60px rgba(0,0,0,.25); }
+body.theme-light .github-modal h3, body.theme-light .github-modal label { color:#111; }
+body.theme-light .github-modal p { color:#5a6570; }
+body.theme-light .github-modal input { background:#f5f5f5; color:#111; border-color:#aaa; }
+body.theme-light .github-modal-actions button { background:#ddd; color:#111; border-color:#aaa; }
+body.theme-light .github-modal-actions .github-allow { background:#111; color:#fff; border-color:#000; }
+.upload-modal-overlay { position:fixed; inset:0; z-index:10010; display:none; align-items:center; justify-content:center; padding:20px; background:rgba(0,0,0,.78); backdrop-filter:blur(5px); }
+.upload-modal-overlay.show { display:flex; }
+.upload-modal { position:relative; width:min(430px,100%); box-sizing:border-box; padding:24px; border:1px solid #3d574c; border-radius:13px; background:#111816; color:#dce9e4; box-shadow:0 20px 65px #000c; }
+.upload-modal h3 { margin:0 0 10px; color:#aed9cb; font-size:1.1rem; }
+.upload-modal p { margin:0; color:#9cafa5; font-size:.84rem; line-height:1.55; }
+.upload-modal-close { position:absolute; top:10px; right:12px; border:0; background:transparent; color:#789087; font-size:1.3rem; cursor:pointer; }
+.upload-modal-close:hover { color:#fff; }
+.upload-choice-row { display:flex; gap:10px; margin-top:20px; }
+.upload-choice-row button { flex:1; padding:11px 12px; border:1px solid #4e7564; border-radius:7px; background:#274639; color:#fff; cursor:pointer; font-weight:700; }
+.upload-choice-row button:hover { background:#35614e; }
+.upload-choice-row button:disabled { opacity:.55; cursor:wait; }
+.upload-modal-status { min-height:1.2em; margin-top:13px!important; color:#ffb86c!important; font-size:.76rem!important; }
+body.theme-light .upload-modal { background:#fff; color:#111; border-color:#aaa; box-shadow:0 20px 60px rgba(0,0,0,.25); }
+body.theme-light .upload-modal h3 { color:#111; }
+body.theme-light .upload-modal p { color:#5a6570; }
+body.theme-light .upload-modal-close { color:#555; }
+body.theme-light .upload-choice-row button { background:#111; color:#fff; border-color:#000; }
 .settings-section { margin-bottom: 34px; }
 .settings-section-title { font-size: 0.72rem; color: #5c7a6e; text-transform: uppercase; letter-spacing: 1.2px; font-weight: 700; margin-bottom: 14px; }
 .execution-mode-choice { display: inline-flex; gap: 4px; padding: 4px; border: 1px solid #26332d; border-radius: 8px; background: #111816; }

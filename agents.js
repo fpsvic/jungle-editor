@@ -55,7 +55,18 @@
     }
 
     function normalizeApiEndpoint(value) {
-        return String(value || '').trim().replace(/\/+$/, '').replace(/\/(?:models|chat\/completions)$/i, '');
+        let endpoint = String(value || '').trim();
+        if (!endpoint) return '';
+        if (!/^https?:\/\//i.test(endpoint)) endpoint = `https://${endpoint}`;
+        try {
+            const url = new URL(endpoint);
+            url.pathname = url.pathname.replace(/\/(?:models|chat\/completions)$/i, '').replace(/\/+$/, '');
+            url.search = '';
+            url.hash = '';
+            return url.toString().replace(/\/$/, '');
+        } catch (_) {
+            return endpoint.replace(/\/+$/, '').replace(/\/(?:models|chat\/completions)$/i, '');
+        }
     }
 
     let apiKey = normalizeApiKey(sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '');
@@ -65,7 +76,7 @@
     const conversation = [];
 
     function resetDetectedModels() {
-        model.querySelectorAll('option[data-agent-discovered="true"], option[data-agent-default="true"]').forEach(option => option.remove());
+        model.querySelectorAll('option[data-agent-discovered="true"], option[data-agent-default="true"], option[data-agent-info="true"]').forEach(option => option.remove());
         if (![...model.options].some(option => option.value === '')) {
             const option = document.createElement('option');
             option.value = '';
@@ -101,6 +112,20 @@
         return Object.keys(PROVIDERS).find(name => PROVIDERS[name].keyPattern.test(key)) || '';
     }
 
+    function providerForEndpoint(value) {
+        const endpoint = normalizeApiEndpoint(value);
+        if (!endpoint) return '';
+        try {
+            const host = new URL(endpoint).hostname.toLowerCase();
+            if (/generativelanguage\.googleapis\.com|aiplatform\.googleapis\.com|googleapis\.com$/.test(host)) return 'Gemini';
+            if (/api\.openai\.com$/.test(host)) return 'OpenAI';
+            if (/openrouter\.ai$/.test(host)) return 'OpenRouter';
+            if (/anthropic\.com$/.test(host)) return 'Anthropic';
+            if (/groq\.com$/.test(host)) return 'Groq';
+        } catch (_) {}
+        return '';
+    }
+
     function providerForModel(value) {
         const modelValue = String(value || '');
         const match = Object.entries(PROVIDERS).find(([, config]) => config.modelPrefix && modelValue.startsWith(config.modelPrefix));
@@ -111,6 +136,7 @@
 
     function configForProvider(provider) {
         if (provider === 'Custom') {
+            if (!apiEndpoint) return null;
             return { kind: 'openai', modelPrefix: 'custom:', defaultModel: 'custom:auto', defaultLabel: 'Auto-detected model', modelsUrl: `${apiEndpoint}/models`, chatUrl: `${apiEndpoint}/chat/completions` };
         }
         return PROVIDERS[provider];
@@ -145,74 +171,138 @@
             option.value = entry.value;
             option.textContent = `${entry.label} · ${provider} API key`;
             option.dataset.agentDefault = 'true';
+            option.dataset.agentProvider = provider;
             model.appendChild(option);
         }
         return true;
+    }
+
+    function showModelInfo(text) {
+        model.querySelectorAll('option[value=""]').forEach(option => option.remove());
+        model.querySelectorAll('option[data-agent-info="true"]').forEach(option => option.remove());
+        const option = document.createElement('option');
+        option.value = '';
+        option.textContent = text;
+        option.disabled = true;
+        option.dataset.agentInfo = 'true';
+        model.appendChild(option);
+        model.value = '';
     }
 
     function addDiscoveredModels(provider, entries) {
         model.querySelector('option[value=""]')?.remove();
         model.querySelectorAll('option[data-agent-discovered="true"]').forEach(option => option.remove());
         const values = new Set([...model.options].map(option => option.value));
+        let available = 0;
         entries.forEach(entry => {
-            if (!entry.value || values.has(entry.value)) return;
+            if (!entry.value) return;
+            available += 1;
+            if (values.has(entry.value)) return;
             const option = document.createElement('option');
             option.value = entry.value;
             option.textContent = `${entry.label} · ${provider} API key`;
             option.dataset.agentDiscovered = 'true';
+            option.dataset.agentProvider = provider;
             model.appendChild(option);
             values.add(entry.value);
         });
-        if (!modelManuallySelected && entries[0]?.value) {
-            model.value = entries[0].value;
+        if (!modelManuallySelected && (entries[0]?.value || model.querySelector('option[data-agent-default="true"]')?.value)) {
+            model.value = entries[0]?.value || model.querySelector('option[data-agent-default="true"]').value;
             sessionStorage.setItem('jungle_agent_model', model.value);
         }
-        return entries.length;
+        return available;
+    }
+
+    function modelCatalogItems(provider, config, data) {
+        let raw = [];
+        if (Array.isArray(data)) raw = data;
+        else if (Array.isArray(data?.data)) raw = data.data;
+        else if (Array.isArray(data?.models)) raw = data.models;
+        else if (Array.isArray(data?.results)) raw = data.results;
+        else if (Array.isArray(data?.available_models)) raw = data.available_models;
+        else if (data?.data && Array.isArray(data.data.data)) raw = data.data.data;
+        else if (data && typeof data.models === 'object' && data.models) raw = Object.entries(data.models).map(([id, value]) => ({ id, ...(value && typeof value === 'object' ? value : {}) }));
+
+        const values = new Set();
+        return raw.map(item => {
+            const object = item && typeof item === 'object' ? item : {};
+            const rawId = typeof item === 'string'
+                ? item
+                : (object.id || object.name || object.model || object.modelId || object.model_id || object.model_name || object.slug || '');
+            const id = String(rawId || '').replace(/^models\//, '').trim();
+            if (!id || values.has(id.toLowerCase())) return null;
+            if (/(embedding|moderation|whisper|tts|dall-e|image-generation|rerank|safety)/i.test(id)) return null;
+            if (config.kind === 'gemini' && Array.isArray(object.supportedGenerationMethods) && object.supportedGenerationMethods.length && !object.supportedGenerationMethods.includes('generateContent')) return null;
+            const value = config.modelPrefix ? `${config.modelPrefix}${id}` : id;
+            values.add(id.toLowerCase());
+            return { value, label: String(object.displayName || object.display_name || object.label || id) };
+        }).filter(Boolean);
+    }
+
+    async function fetchModelCatalog(provider, config, key) {
+        const urls = [config.modelsUrl];
+        // Gemini accepts the key in a header, but some browser/proxy setups
+        // strip that header. Retry its documented query-string form.
+        if (config.kind === 'gemini' && !/[?&]key=/i.test(config.modelsUrl)) urls.push(`${config.modelsUrl}?key=${encodeURIComponent(key)}`);
+        const headers = config.kind === 'gemini'
+            ? { 'x-goog-api-key': key }
+            : config.kind === 'anthropic'
+                ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
+                : { Authorization: `Bearer ${key}` };
+        let lastError = null;
+        for (const url of urls) {
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 8000);
+            try {
+                const requestHeaders = config.kind === 'gemini' && /[?&]key=/i.test(url) ? {} : headers;
+                const response = await fetch(url, { headers: requestHeaders, signal: controller.signal });
+                const data = await response.json().catch(() => ({}));
+                if (response.ok) return data;
+                const message = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || `Model discovery failed (${response.status})`;
+                const error = new Error(message);
+                error.auth = response.status === 401 || response.status === 403 || /api key|invalid.*key|unauthenticated|authentication|unauthor/i.test(message);
+                lastError = error;
+            } catch (error) {
+                lastError = error;
+                if (error.auth && url === urls[urls.length - 1]) throw error;
+            } finally {
+                clearTimeout(timeout);
+            }
+        }
+        throw lastError || new Error(`Could not load ${provider} models.`);
     }
 
     async function discoverModelsForKey(key, announce = true) {
-        const provider = providerForKey(key) || (apiEndpoint ? 'Custom' : '');
+        const endpointProvider = providerForEndpoint(apiEndpoint);
+        // An explicitly supplied endpoint wins over a key prefix. Many
+        // providers use `sk-`-style keys, so treating every one as OpenAI
+        // would send the key to the wrong host.
+        const provider = apiEndpoint ? (endpointProvider || 'Custom') : providerForKey(key);
         if (!provider) {
             status.textContent = 'API key connected';
-            if (announce) addMessage('system', 'API key saved, but its provider cannot be identified automatically. Select a compatible model or provide its API endpoint.');
+            showModelInfo('Add an API endpoint to load models');
+            if (announce) addMessage('system', 'API key saved, but a key alone cannot identify an arbitrary provider. Add that provider’s API endpoint to load its models.');
             return;
         }
         const config = configForProvider(provider);
+        if (!config) {
+            showModelInfo('Add an API endpoint to load models');
+            if (announce) addMessage('system', 'Add an OpenAI-compatible API endpoint so Jungle Editor can request this provider’s model list.');
+            return;
+        }
         // Select a provider-compatible fallback before discovery. If a browser
         // blocks the provider's model-list request, the first chat still uses
         // the right API instead of sending an OpenAI key to Gemini (or vice versa).
         ensureProviderModel(provider);
         selectDefaultModel(provider);
         status.textContent = 'Loading models…';
-        let timeout;
         try {
-            const controller = new AbortController();
-            timeout = setTimeout(() => controller.abort(), 8000);
-            const headers = config.kind === 'gemini'
-                ? { 'x-goog-api-key': key }
-                : config.kind === 'anthropic'
-                    ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
-                    : { Authorization: `Bearer ${key}` };
-            const response = await fetch(config.modelsUrl, { headers, signal: controller.signal });
-            clearTimeout(timeout);
-            const data = await response.json().catch(() => ({}));
-            const message = data.error?.message || `Model discovery failed (${response.status})`;
-            if (!response.ok) {
-                const error = new Error(message);
-                error.auth = response.status === 401 || response.status === 403 || /api key|invalid.*key|unauthenticated/i.test(message);
-                throw error;
-            }
-            const entries = config.kind === 'gemini'
-                ? (data.models || []).filter(item => (item.supportedGenerationMethods || []).includes('generateContent')).map(item => ({ value: String(item.name || '').replace(/^models\//, ''), label: item.displayName || item.name }))
-                : (data.data || []).filter(item => {
-                    const id = String(item.id || '');
-                    return id && !/(embedding|moderation|whisper|tts|dall-e|image|rerank)/i.test(id);
-                }).map(item => ({ value: `${config.modelPrefix}${item.id}`, label: item.display_name || item.displayName || item.id }));
+            const data = await fetchModelCatalog(provider, config, key);
+            const entries = modelCatalogItems(provider, config, data);
             const count = addDiscoveredModels(provider, entries);
             status.textContent = 'API key connected';
             if (announce) addMessage('system', count ? `Added ${count} ${provider} model${count === 1 ? '' : 's'} to the list.` : `The ${provider} key is valid, but no chat models were returned.`);
         } catch (error) {
-            if (timeout) clearTimeout(timeout);
             status.textContent = 'API key connected';
             if (error.auth) {
                 addMessage('system', `${provider} did not accept this key: ${error.message} The key was kept so you can choose another model or endpoint.`);
@@ -275,6 +365,7 @@
         if (apiEndpoint) sessionStorage.setItem('jungle_agent_api_endpoint', apiEndpoint);
         else sessionStorage.removeItem('jungle_agent_api_endpoint');
         keyInput.value = '';
+        resetDetectedModels();
         setConnected(true);
         addMessage('system', 'API key saved. Checking available models…');
         await discoverModelsForKey(apiKey);

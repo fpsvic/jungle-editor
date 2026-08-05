@@ -778,6 +778,12 @@ projectTitleBtn.onclick = () => {
     const style = document.createElement('style');
     style.textContent = css;
     document.head.appendChild(style);
+    const controlSizing = document.createElement('style');
+    controlSizing.textContent = '.tools-icon-btn{width:30px!important;height:30px!important;border:1px solid #354a41!important;border-radius:6px!important}.tools-icon-btn svg{width:18px!important;height:18px!important}#split-editor-btn{width:28px!important;height:28px!important;font-size:20px!important}';
+    document.head.appendChild(controlSizing);
+    const dropdownSizing = document.createElement('style');
+    dropdownSizing.textContent = '.tools-menu button,.bug-language-menu button,.popup-menu-item,.github-repo-item,#language-list-dropdown button,#language-list-dropdown li,.language-menu button,.language-menu li{font-size:.8125rem!important;line-height:normal;box-sizing:border-box}.tools-menu button{padding:3px 10px!important;min-height:21px}.bug-language-menu button{padding:3px 10px!important;min-height:21px}.popup-menu-item{padding:3px 12px!important;min-height:21px}.github-repo-item{padding:3px 7px!important;min-height:21px}.github-repo-item strong,.github-repo-item small{font-size:inherit!important}.language-menu button,.language-menu li,#language-list-dropdown button,#language-list-dropdown li{padding:3px 10px;min-height:21px}';
+    document.head.appendChild(dropdownSizing);
     // Keep primary workspace actions discoverable even while a scan or project view
     // changes body classes. These controls should never disappear from the toolbar.
     const toolbarVisibilityStyle = document.createElement('style');
@@ -1342,6 +1348,31 @@ window.onload = () => {
             JungleUI.showToast('Nothing to import.', 'info');
         }
     }
+    // Public adapter for the Tools > Upload folder/file chooser. Browser file
+    // inputs expose folder paths through webkitRelativePath, so the existing
+    // importer can preserve the selected folder tree exactly like drag/drop.
+    async function importSelectedFiles(fileList, folderMode = false) {
+        const out = { files: [], folders: new Set() };
+        Array.from(fileList || []).forEach(file => {
+            const path = String(folderMode ? (file.webkitRelativePath || file.name) : file.name || '').replace(/^\/+/, '');
+            if (!path) return;
+            out.files.push({ path, file });
+            if (folderMode && path.includes('/')) {
+                const parts = path.split('/');
+                parts.pop();
+                let current = '';
+                parts.forEach(part => {
+                    current = current ? `${current}/${part}` : part;
+                    out.folders.add(current);
+                });
+            }
+        });
+        await importCollected(out);
+    }
+    window.JungleFileImport = {
+        uploadFiles: fileList => importSelectedFiles(fileList, false),
+        uploadFolder: fileList => importSelectedFiles(fileList, true)
+    };
     async function handleDrop(dataTransfer) {
         const out = { files: [], folders: new Set() };
         const items = dataTransfer.items;
@@ -1415,6 +1446,7 @@ window.onload = () => {
     const buttonOutlinesToggle = document.getElementById('toggle-button-outlines');
     const compactUIToggle = document.getElementById('toggle-compact-ui');
     const reduceMotionToggle = document.getElementById('toggle-reduce-motion');
+    const githubPluginToggle = document.getElementById('toggle-github-plugin');
     const settingsOpenExtensions = document.getElementById('settings-open-extensions');
     if (!settingsScreen) return;
 
@@ -1478,10 +1510,11 @@ window.onload = () => {
             b.classList.toggle('selected', selected);
             b.setAttribute('aria-pressed', String(selected));
         });
-        [buttonOutlinesToggle, compactUIToggle, reduceMotionToggle].forEach(toggle => {
+        [buttonOutlinesToggle, compactUIToggle, reduceMotionToggle, githubPluginToggle].forEach(toggle => {
             if (!toggle) return;
             const key = toggle === buttonOutlinesToggle ? 'buttonOutlines'
-                : toggle === compactUIToggle ? 'compactUI' : 'reduceMotion';
+                : toggle === compactUIToggle ? 'compactUI'
+                    : toggle === reduceMotionToggle ? 'reduceMotion' : 'githubPlugin';
             const on = key === 'buttonOutlines' ? JungleSettings.get(key) !== false : !!JungleSettings.get(key);
             toggle.classList.toggle('on', on);
             toggle.setAttribute('aria-checked', String(on));
@@ -1540,6 +1573,13 @@ window.onload = () => {
         JungleSettings.set('reduceMotion', !JungleSettings.get('reduceMotion'));
         applyAppearance();
         syncUI();
+    });
+    githubPluginToggle?.addEventListener('click', () => {
+        const enabled = !githubPluginToggle.classList.contains('on');
+        JungleSettings.set('githubPlugin', enabled);
+        syncUI();
+        window.dispatchEvent(new CustomEvent('jungle-github-plugin-change', { detail: { enabled } }));
+        JungleUI.showToast(enabled ? 'GitHub plugin enabled' : 'GitHub plugin disabled — repository access revoked', enabled ? 'success' : 'info');
     });
     settingsOpenExtensions?.addEventListener('click', () => {
         settingsScreen.classList.remove('visible');
@@ -1630,7 +1670,11 @@ window.onload = () => {
             if (repaired.accepted) { project.files[file] = repaired.code; fixed += repaired.changed; }
         }
         JungleStorage.saveProjects(projects);
-        if (project.currentFile) { editor.value = project.files[project.currentFile] || ''; JungleUI.updateCodeHighlight(); }
+        if (project.currentFile) {
+            if (typeof jungleTextEngine !== 'undefined' && jungleTextEngine?.setDocument) jungleTextEngine.setDocument(project.files[project.currentFile] || '');
+            else editor.value = project.files[project.currentFile] || '';
+            JungleUI.updateCodeHighlight();
+        }
         runBugScan();
         document.body.classList.remove('bug-scan-mode');
         JungleUI.showToast(fixed ? `Debug verified and applied ${fixed} safe fix${fixed === 1 ? '' : 'es'} across ${checked} file${checked === 1 ? '' : 's'}` : `Debug checked ${checked} file${checked === 1 ? '' : 's'} — no verified safe fixes`);

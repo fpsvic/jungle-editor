@@ -181,6 +181,13 @@
                             </div>
                             <span class="plugin-status">Built in</span>
                         </div>
+                        <div class="plugin-card">
+                            <div class="plugin-card-info">
+                                <div class="plugin-card-title">GitHub plugin</div>
+                                <div class="plugin-card-desc">Allow Jungle Editor to connect to GitHub, list your repositories, and import a repository into the current project after you approve it.</div>
+                            </div>
+                            <button class="toggle-switch" id="toggle-github-plugin" role="switch" aria-checked="false"><span class="toggle-knob"></span></button>
+                        </div>
                     </div>
                 </section>
             </div>
