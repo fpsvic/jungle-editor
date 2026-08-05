@@ -789,6 +789,7 @@ const langPickerBack = document.getElementById('lang-picker-back');
 const langPickerSearch = document.getElementById('lang-picker-search');
 const langPickerGrid = document.getElementById('lang-picker-grid');
 extensionsBtn.onclick = () => {
+    languagePickerExpanded = false;
     langPickerSearch.value = '';
     renderLangPickerGrid('');
     langPickerScreen.classList.add('visible');
@@ -1139,6 +1140,8 @@ const LANG_ICONS = {
     'Zig': '⚡', 'Groovy': '🎵', 'Apex': '☁️', 'GDScript': '🎮', 'Solidity': '🪙', 'Nix': '❄️', 'HCL': '🏗️'
 };
 const ALL_LANGS = ["Apex","Assembly","Bash","C","C#","C++","Clojure","COBOL","D","Dart","Elixir","Erlang","F#","Fortran","GDScript","Go","Groovy","HCL","Haskell","HTML","Java","Javascript","Julia","Kotlin","Lisp","Lua","Nim","Nix","OCaml","Pascal","Perl","PHP","Prolog","Python","R","Ruby","Rust","Scala","Solidity","SQL","Swift","TypeScript","Zig"];
+const PRIMARY_LANGS = ['HTML', 'Javascript', 'Java', 'SQL', 'Python', 'TypeScript', 'C#', 'C++', 'C'];
+let languagePickerExpanded = false;
 const LANGUAGE_DESCRIPTIONS = {
     Apex: 'Enterprise Development', Assembly: 'Low-Level Development', Bash: 'Script Automation',
     C: 'Systems Programming', 'C#': 'Game & Desktop Development', 'C++': 'Game & High-Performance Development',
@@ -1167,7 +1170,7 @@ function renderLangPickerGrid(filter) {
         const sel = l === current ? ' selected' : '';
         return `<div class="lang-picker-card${sel}" data-lang="${l}"><span class="lang-picker-icon">${icon}</span><span class="lang-picker-name">${displayName}</span><span class="lang-picker-description">${description}</span></div>`;
     }).join('');
-    langPickerGrid.querySelectorAll('.lang-picker-card').forEach(card => {
+        langPickerGrid.querySelectorAll('.lang-picker-card').forEach(card => {
         card.onclick = () => {
             const targetLang = card.getAttribute('data-lang');
             selectedLanguages = [targetLang];
@@ -1635,8 +1638,23 @@ window.onload = () => {
     document.addEventListener('click', close);
     // The Extensions button now remains open while languages are checked or unchecked.
     renderLangPickerGrid = function(filter) {
-        const filtered = filter ? ALL_LANGS.filter(language => language.toLowerCase().includes(filter)) : ALL_LANGS;
+        const query = String(filter || '').trim().toLowerCase();
+        const sourceLanguages = query || languagePickerExpanded ? ALL_LANGS : PRIMARY_LANGS;
+        const filtered = sourceLanguages.filter(language => !query || language.toLowerCase().includes(query));
         langPickerGrid.innerHTML = filtered.map(language => `<div class="lang-picker-card${selectedLanguages.includes(language) ? ' selected' : ''}" data-lang="${language}"><span class="lang-picker-icon">${LANG_ICONS[language] || '📄'}</span><span class="lang-picker-name">${LANGUAGE_DISPLAY_NAMES[language] || language}</span><span class="lang-picker-description">${selectedLanguages.includes(language) ? '✓ Selected' : LANGUAGE_DESCRIPTIONS[language] || ''}</span></div>`).join('');
+        if (!query) {
+            const moreOptions = document.createElement('button');
+            moreOptions.type = 'button';
+            moreOptions.className = 'lang-picker-more';
+            moreOptions.textContent = languagePickerExpanded ? 'Show fewer languages' : 'More options';
+            moreOptions.setAttribute('aria-expanded', String(languagePickerExpanded));
+            moreOptions.onclick = () => {
+                languagePickerExpanded = !languagePickerExpanded;
+                renderLangPickerGrid(query);
+                langPickerGrid.scrollTop = 0;
+            };
+            langPickerGrid.appendChild(moreOptions);
+        }
         langPickerGrid.querySelectorAll('.lang-picker-card').forEach(card => card.onclick = () => {
             const language = card.dataset.lang;
             selectedLanguages = selectedLanguages.includes(language) ? selectedLanguages.filter(item => item !== language) : [...selectedLanguages, language];

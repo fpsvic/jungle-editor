@@ -158,6 +158,8 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .lang-picker-icon { font-size: 2rem; line-height: 1; }
 .lang-picker-name { font-size: 0.92rem; font-weight: 800; color: #aed9cb; text-align: center; }
 .lang-picker-description { font-size: 0.72rem; line-height: 1.35; color: #7f9c90; text-align: center; }
+.lang-picker-more { grid-column: 1 / -1; justify-self: center; min-width: 190px; padding: 11px 22px; border: 1px solid #415c4f; border-radius: 999px; background: #172420; color: #aed9cb; cursor: pointer; font: 700 .82rem Inter, sans-serif; transition: background-color .18s, border-color .18s, color .18s, transform .18s; }
+.lang-picker-more:hover { background: #2b5143; border-color: #74a896; color: #fff; transform: translateY(-1px); }
 .editor-wrapper { display: flex; flex: 1; min-width: 0; position: relative; overflow: hidden; background-color: #0b0d10; }
 #line-gutter { padding: 20px 10px 20px 15px; background-color: #080a0d; color: #35453e; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; text-align: right; user-select: none; border-right: 1px solid #1c2321; min-width: 45px; white-space: pre; overflow: hidden; box-sizing: border-box; }
 #editor-container { position: relative; flex: 1; height: 100%; overflow: hidden; }
@@ -373,6 +375,8 @@ body.theme-light #lang-picker-back, body.theme-light #lang-picker-search { backg
 body.theme-light .lang-picker-card { background:#f5f5f5; color:#111; border-color:#ccc; }
 body.theme-light .lang-picker-card:hover, body.theme-light .lang-picker-card.selected { background:#ddd; border-color:#333; box-shadow:none; }
 body.theme-light .lang-picker-description { color:#666; }
+body.theme-light .lang-picker-more { background:#eee; border-color:#999; color:#111; }
+body.theme-light .lang-picker-more:hover { background:#ddd; border-color:#333; color:#000; }
 body.theme-light .modal-overlay { background:rgba(0,0,0,.5); }
 body.theme-light .modal-card { background:#fff; color:#111; border-color:#aaa; box-shadow:0 20px 60px rgba(0,0,0,.25); }
 body.theme-light .modal-card input { background:#f5f5f5; color:#111; border-color:#aaa; }
