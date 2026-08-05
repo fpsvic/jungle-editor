@@ -51,6 +51,23 @@
             <span id="settings-title">⚙ Settings</span>
         </div>
         <div id="settings-body">
+            <nav id="settings-nav" aria-label="Settings sections">
+                <div class="settings-nav-label">Settings</div>
+                <button class="settings-tab active" id="settings-tab-main" data-settings-tab="main" type="button">
+                    <span class="settings-tab-icon" aria-hidden="true">&#9881;</span>
+                    <span>Main</span>
+                </button>
+                <button class="settings-tab" id="settings-tab-appearance" data-settings-tab="appearance" type="button">
+                    <span class="settings-tab-icon" aria-hidden="true">&#9681;</span>
+                    <span>Appearance</span>
+                </button>
+                <button class="settings-tab" id="settings-tab-plugins" data-settings-tab="plugins" type="button">
+                    <span class="settings-tab-icon" aria-hidden="true">&#9883;</span>
+                    <span>Plugins</span>
+                </button>
+            </nav>
+            <div id="settings-content">
+                <section class="settings-panel active" id="settings-panel-main" data-settings-panel="main" aria-labelledby="settings-tab-main">
             <div class="settings-section">
                 <div class="settings-section-title">Code Execution</div>
                 <div class="setting-row">
@@ -80,6 +97,8 @@
                 <div class="setting-row"><div class="setting-info"><div class="setting-name">Debugger Namespaces</div><div class="setting-desc">Allow Debug to inspect namespace-qualified code.</div></div><button class="toggle-switch" id="toggle-debug-namespaces" role="switch" aria-checked="false"><span class="toggle-knob"></span></button></div>
                 <div class="setting-row"><div class="setting-info"><div class="setting-name">Debugger Repair Level</div><div class="setting-desc">Low risk preserves behavior; High risk enables behavior-changing cleanup.</div></div><div class="execution-mode-choice" id="debug-risk-choice"><button class="execution-mode-opt" data-risk="low">Low Risk</button><button class="execution-mode-opt" data-risk="high">High Risk</button></div></div>
             </div>
+                </section>
+                <section class="settings-panel" id="settings-panel-appearance" data-settings-panel="appearance" aria-labelledby="settings-tab-appearance">
             <div class="settings-section">
                 <div class="settings-section-title">Appearance</div>
                 <div class="setting-row">
@@ -92,6 +111,78 @@
                         <button class="theme-opt" data-theme="light">☀️ Light</button>
                     </div>
                 </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Button Colors</div>
+                        <div class="setting-desc">Choose the accent palette used by Jungle Editor controls. Jungle is the default palette.</div>
+                    </div>
+                    <div class="theme-choice" id="button-palette-choice" role="group" aria-label="Button color palette">
+                        <button class="theme-opt" data-button-palette="jungle" type="button">Jungle</button>
+                        <button class="theme-opt" data-button-palette="slate" type="button">Slate</button>
+                        <button class="theme-opt" data-button-palette="amber" type="button">Amber</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Button Outlines</div>
+                        <div class="setting-desc">Keep the subtle borders around buttons and controls for a clearer interface.</div>
+                    </div>
+                    <button class="toggle-switch" id="toggle-button-outlines" role="switch" aria-checked="true"><span class="toggle-knob"></span></button>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Text Colors</div>
+                        <div class="setting-desc">Adjust the contrast of headings, labels, and supporting text.</div>
+                    </div>
+                    <div class="theme-choice" id="text-palette-choice" role="group" aria-label="Text color palette">
+                        <button class="theme-opt" data-text-palette="jungle" type="button">Jungle</button>
+                        <button class="theme-opt" data-text-palette="bright" type="button">Bright</button>
+                        <button class="theme-opt" data-text-palette="soft" type="button">Soft</button>
+                    </div>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Compact Controls</div>
+                        <div class="setting-desc">Use tighter spacing in settings and workspace controls to fit more on screen.</div>
+                    </div>
+                    <button class="toggle-switch" id="toggle-compact-ui" role="switch" aria-checked="false"><span class="toggle-knob"></span></button>
+                </div>
+                <div class="setting-row">
+                    <div class="setting-info">
+                        <div class="setting-name">Reduce Motion</div>
+                        <div class="setting-desc">Reduce interface transitions and movement for a calmer experience.</div>
+                    </div>
+                    <button class="toggle-switch" id="toggle-reduce-motion" role="switch" aria-checked="false"><span class="toggle-knob"></span></button>
+                </div>
+            </div>
+                </section>
+                <section class="settings-panel" id="settings-panel-plugins" data-settings-panel="plugins" aria-labelledby="settings-tab-plugins">
+                    <div class="settings-section">
+                        <div class="settings-section-title">Plugins &amp; Extensions</div>
+                        <div class="settings-intro">Jungle Editor keeps its default experience lightweight. These built-in tools are available without changing the core editor.</div>
+                        <div class="plugin-card">
+                            <div class="plugin-card-info">
+                                <div class="plugin-card-title">Language extensions</div>
+                                <div class="plugin-card-desc">Enable language packs for project files and choose which languages appear in the workspace.</div>
+                            </div>
+                            <button class="settings-action-btn" id="settings-open-extensions" type="button">Browse extensions</button>
+                        </div>
+                        <div class="plugin-card">
+                            <div class="plugin-card-info">
+                                <div class="plugin-card-title">Jungle scanners</div>
+                                <div class="plugin-card-desc">The built-in scanner and analyzer check syntax, quality, accessibility, and safety across supported languages.</div>
+                            </div>
+                            <span class="plugin-status">Built in</span>
+                        </div>
+                        <div class="plugin-card">
+                            <div class="plugin-card-info">
+                                <div class="plugin-card-title">Workspace agent tools</div>
+                                <div class="plugin-card-desc">Connected AI models can inspect and work with the editor through the Agents panel.</div>
+                            </div>
+                            <span class="plugin-status">Built in</span>
+                        </div>
+                    </div>
+                </section>
             </div>
         </div>
     </div>

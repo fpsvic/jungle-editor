@@ -1,6 +1,18 @@
 // --- User settings (persisted, separate from project data) ---
 class JungleSettings {
-    static DEFAULTS = { disableAnalysis: false, theme: 'midnight', executionMode: 'interpreter', projectScan: false, debugNamespaces: false, debugRisk: 'low' };
+    static DEFAULTS = {
+        disableAnalysis: false,
+        theme: 'midnight',
+        executionMode: 'interpreter',
+        projectScan: false,
+        debugNamespaces: false,
+        debugRisk: 'low',
+        buttonPalette: 'jungle',
+        buttonOutlines: true,
+        textPalette: 'jungle',
+        compactUI: false,
+        reduceMotion: false
+    };
     static _cache = null;
     static all() {
         if (this._cache) return this._cache;
@@ -99,6 +111,9 @@ class JungleStorage {
 class JungleIntelligence {
     static languageExtensions = {
         'HTML': '.html',
+        'JSON': '.json',
+        'CSS': '.css',
+        'SQL': '.sql',
         'Javascript': '.js',
         'TypeScript': '.ts',
         'Python': '.py',
@@ -133,15 +148,23 @@ class JungleIntelligence {
         'Assembly': '.asm',
         'Lisp': '.lisp',
         'Prolog': '.pl',
-        'Pascal': '.pas'
+        'Pascal': '.pas',
+        'HCL': '.tf',
+        'Solidity': '.sol',
+        'GDScript': '.gd',
+        'Nix': '.nix'
     };
     static extensionLanguages = {
         '.html': 'HTML',
         '.htm': 'HTML',
         '.js': 'Javascript',
+        '.jsx': 'Javascript',
         '.mjs': 'Javascript',
         '.cjs': 'Javascript',
         '.ts': 'TypeScript',
+        '.tsx': 'TypeScript',
+        '.json': 'JSON',
+        '.jsonc': 'JSON',
         '.py': 'Python',
         '.cpp': 'C++',
         '.cc': 'C++',
@@ -179,7 +202,13 @@ class JungleIntelligence {
         '.lisp': 'Lisp',
         '.pas': 'Pascal',
         '.css': 'CSS',
-        '.sql': 'SQL'
+        '.sql': 'SQL',
+        '.tf': 'HCL',
+        '.tfvars': 'HCL',
+        '.hcl': 'HCL',
+        '.sol': 'Solidity',
+        '.gd': 'GDScript',
+        '.nix': 'Nix'
     };
     static getExtension(name) {
         const match = String(name || '').toLowerCase().match(/(\.[a-z0-9+#]+)$/);

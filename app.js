@@ -1074,16 +1074,16 @@ function showProjectIssues(report) {
 // Map every code file in the project (path -> language, skipping non-code files) and scan
 // each one for bugs. The analyzer gets the whole `files` map so cross-file checks still work.
 // Returns { map:[{file,lang,folder}], results:[{file,lang,issues}], scanned, total }.
-function analyzeWholeProject(p) {
+async function analyzeWholeProject(p) {
     const map = [], results = [];
     let total = 0;
     for (const fname of Object.keys(p.files).sort()) {
-        const lang = JungleIntelligence.extensionLanguages[JungleIntelligence.getExtension(fname)];
+        const lang = JungleIntelligence.languageFromFilename(fname, null);
         if (!lang) continue; // non-code / data file — nothing to scan
         const folder = fname.includes('/') ? fname.slice(0, fname.lastIndexOf('/')) : '';
         map.push({ file: fname, lang, folder });
         let issues = [];
-        try { issues = JungleScanner.scan(lang, p.files[fname] || ''); } catch (_) {}
+        try { issues = await JungleScanner.scanAsync(lang, p.files[fname] || ''); } catch (_) { issues = [{ line: 1, severity: 'warning', kind: 'Scanner integration', msg: 'Scanner could not complete for this file.', hint: 'Try scanning the file again.' }]; }
         if (typeof JungleAnalyzer !== 'undefined') {
             try { issues.push(...JungleAnalyzer.analyze(lang, p.files, fname)); } catch (_) {}
         }
@@ -1100,14 +1100,14 @@ async function runLiveAnalysis() {
     if (!p || !p.currentFile) return;
     // Whole-project mode (opt-in setting): map + scan every file, report bugs grouped by file.
     if (typeof JungleSettings !== 'undefined' && JungleSettings.get('projectScan')) {
-        showProjectIssues(analyzeWholeProject(p));
+        showProjectIssues(await analyzeWholeProject(p));
         return;
     }
     // Scan the file as ITS OWN language (by extension), not the project's selected language —
     // otherwise a .py/.cpp/etc. file in a JS project gets scanned with the wrong rules and
     // lights up with hundreds of false errors. Unknown / non-code types (.txt, .json, .md,
     // images, etc.) aren't scanned at all — there's nothing meaningful to check.
-    const lang = JungleIntelligence.extensionLanguages[JungleIntelligence.getExtension(p.currentFile)];
+    const lang = JungleIntelligence.languageFromFilename(p.currentFile, null);
     if (!lang) { showConsoleIssues([], p.currentFile); return; }
     let issues = [];
     try { issues = await JungleScanner.scanAsync(lang, p.files[p.currentFile] || ''); } catch (_) {}
@@ -1405,10 +1405,44 @@ window.onload = () => {
     const projectScanToggle = document.getElementById('toggle-project-scan');
     const themeChoice = document.getElementById('theme-choice');
     const executionModeChoice = document.getElementById('execution-mode-choice');
+    const settingsTabs = Array.from(document.querySelectorAll('.settings-tab'));
+    const settingsPanels = Array.from(document.querySelectorAll('.settings-panel'));
+    const buttonPaletteChoice = document.getElementById('button-palette-choice');
+    const textPaletteChoice = document.getElementById('text-palette-choice');
+    const buttonOutlinesToggle = document.getElementById('toggle-button-outlines');
+    const compactUIToggle = document.getElementById('toggle-compact-ui');
+    const reduceMotionToggle = document.getElementById('toggle-reduce-motion');
+    const settingsOpenExtensions = document.getElementById('settings-open-extensions');
     if (!settingsScreen) return;
 
     function applyTheme(theme) {
         document.body.classList.toggle('theme-light', theme === 'light');
+    }
+    function applyAppearance() {
+        const body = document.body;
+        const palette = ['jungle', 'slate', 'amber'].includes(JungleSettings.get('buttonPalette'))
+            ? JungleSettings.get('buttonPalette') : 'jungle';
+        const textPalette = ['jungle', 'bright', 'soft'].includes(JungleSettings.get('textPalette'))
+            ? JungleSettings.get('textPalette') : 'jungle';
+        ['appearance-jungle', 'appearance-slate', 'appearance-amber'].forEach(cls => body.classList.remove(cls));
+        ['text-jungle', 'text-bright', 'text-soft'].forEach(cls => body.classList.remove(cls));
+        body.classList.add(`appearance-${palette}`, `text-${textPalette}`);
+        body.classList.toggle('button-outlines-off', JungleSettings.get('buttonOutlines') === false);
+        body.classList.toggle('compact-ui', !!JungleSettings.get('compactUI'));
+        body.classList.toggle('reduce-motion', !!JungleSettings.get('reduceMotion'));
+    }
+    function setSettingsTab(tabName) {
+        const activeTab = ['main', 'appearance', 'plugins'].includes(tabName) ? tabName : 'main';
+        settingsTabs.forEach(tab => {
+            const selected = tab.dataset.settingsTab === activeTab;
+            tab.classList.toggle('active', selected);
+            tab.setAttribute('aria-selected', String(selected));
+        });
+        settingsPanels.forEach(panel => {
+            const selected = panel.dataset.settingsPanel === activeTab;
+            panel.classList.toggle('active', selected);
+            panel.toggleAttribute('hidden', !selected);
+        });
     }
     function syncUI() {
         // Toggle "on" means scanners/analyzers are ENABLED (i.e. not disabled).
@@ -1429,9 +1463,29 @@ window.onload = () => {
             b.classList.toggle('selected', selected);
             b.setAttribute('aria-pressed', String(selected));
         });
+        const buttonPalette = JungleSettings.get('buttonPalette') || 'jungle';
+        buttonPaletteChoice?.querySelectorAll('[data-button-palette]').forEach(b => {
+            const selected = b.dataset.buttonPalette === buttonPalette;
+            b.classList.toggle('selected', selected);
+            b.setAttribute('aria-pressed', String(selected));
+        });
+        const textPalette = JungleSettings.get('textPalette') || 'jungle';
+        textPaletteChoice?.querySelectorAll('[data-text-palette]').forEach(b => {
+            const selected = b.dataset.textPalette === textPalette;
+            b.classList.toggle('selected', selected);
+            b.setAttribute('aria-pressed', String(selected));
+        });
+        [buttonOutlinesToggle, compactUIToggle, reduceMotionToggle].forEach(toggle => {
+            if (!toggle) return;
+            const key = toggle === buttonOutlinesToggle ? 'buttonOutlines'
+                : toggle === compactUIToggle ? 'compactUI' : 'reduceMotion';
+            const on = key === 'buttonOutlines' ? JungleSettings.get(key) !== false : !!JungleSettings.get(key);
+            toggle.classList.toggle('on', on);
+            toggle.setAttribute('aria-checked', String(on));
+        });
     }
 
-    openBtn.onclick = () => { settingsScreen.classList.add('visible'); syncUI(); };
+    openBtn.onclick = () => { settingsScreen.classList.add('visible'); setSettingsTab('main'); syncUI(); };
     backBtn.onclick = () => settingsScreen.classList.remove('visible');
 
     analysisToggle.onclick = () => {
@@ -1452,6 +1506,43 @@ window.onload = () => {
         JungleUI.showToast(willEnable ? 'Whole-project analysis on — scanning all files' : 'Whole-project analysis off — scanning current file only', willEnable ? 'success' : 'info');
     };
 
+    settingsTabs.forEach(tab => {
+        tab.onclick = () => setSettingsTab(tab.dataset.settingsTab);
+    });
+    buttonPaletteChoice?.querySelectorAll('[data-button-palette]').forEach(btn => {
+        btn.onclick = () => {
+            JungleSettings.set('buttonPalette', btn.dataset.buttonPalette);
+            applyAppearance();
+            syncUI();
+        };
+    });
+    textPaletteChoice?.querySelectorAll('[data-text-palette]').forEach(btn => {
+        btn.onclick = () => {
+            JungleSettings.set('textPalette', btn.dataset.textPalette);
+            applyAppearance();
+            syncUI();
+        };
+    });
+    buttonOutlinesToggle?.addEventListener('click', () => {
+        JungleSettings.set('buttonOutlines', JungleSettings.get('buttonOutlines') === false);
+        applyAppearance();
+        syncUI();
+    });
+    compactUIToggle?.addEventListener('click', () => {
+        JungleSettings.set('compactUI', !JungleSettings.get('compactUI'));
+        applyAppearance();
+        syncUI();
+    });
+    reduceMotionToggle?.addEventListener('click', () => {
+        JungleSettings.set('reduceMotion', !JungleSettings.get('reduceMotion'));
+        applyAppearance();
+        syncUI();
+    });
+    settingsOpenExtensions?.addEventListener('click', () => {
+        settingsScreen.classList.remove('visible');
+        if (extensionsBtn) extensionsBtn.click();
+    });
+
     themeChoice.querySelectorAll('.theme-opt').forEach(btn => {
         btn.onclick = () => {
             const theme = btn.dataset.theme;
@@ -1469,7 +1560,9 @@ window.onload = () => {
     });
 
     // Apply persisted settings on first load.
+    setSettingsTab('main');
     applyTheme(JungleSettings.get('theme'));
+    applyAppearance();
     syncUI();
 })();
 
@@ -1497,12 +1590,12 @@ window.onload = () => {
             if (scanLanguages.length) runBugScan();
         });
     };
-    const runBugScan = () => {
+    const runBugScan = async () => {
         const project = JungleUI.getCurrentProject(); if (!project || !scanLanguages.length) return;
         document.body.classList.add('bug-scan-mode');
         const results = [], map = [], seen = new Set(); let total = 0;
         for (const [file, code] of Object.entries(project.files)) for (const language of scanLanguages) {
-            let issues = []; try { issues = JungleScanner.scan(language, code || ''); } catch (_) {}
+            let issues = []; try { issues = await JungleScanner.scanAsync(language, code || ''); } catch (_) { issues = [{ line: 1, severity: 'warning', kind: 'Scanner integration', msg: 'Scanner could not complete for this file.', hint: 'Try scanning the file again.' }]; }
             if (typeof JungleAnalyzer !== 'undefined') try { issues.push(...JungleAnalyzer.analyze(language, project.files, file)); } catch (_) {}
             issues = issues.filter(issue => { const key = `${file}:${language}:${issue.line}:${issue.msg}`; if (seen.has(key)) return false; seen.add(key); return true; });
             map.push({ file, lang: language, folder: file.includes('/') ? file.slice(0, file.lastIndexOf('/')) : '' });

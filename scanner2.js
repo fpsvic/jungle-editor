@@ -10,6 +10,10 @@ JungleScanner.scanHtmlPatterns = function (lines) {
         const issues = [];
         const e = (ln, msg, hint, kind, col, sev) => issues.push(this.makeIssue(ln, msg, hint, kind, col ?? null, sev ?? "warning"));
         const fullCode = lines.join('\n');
+        const lineOffsets = [];
+        let runningOffset = 0;
+        lines.forEach((line, index) => { lineOffsets[index] = runningOffset; runningOffset += line.length + 1; });
+        const htmlTokens = this.tokenizeHtml(fullCode);
         // Missing <!DOCTYPE html>
         if (!/<!DOCTYPE\s+html>/i.test(fullCode)) {
             e(1, "Missing <!DOCTYPE html> declaration.", "Add <!DOCTYPE html> as the very first line of the document.", "HTML best practice", null, "warning");
@@ -20,7 +24,9 @@ JungleScanner.scanHtmlPatterns = function (lines) {
             e(htmlLine >= 0 ? htmlLine + 1 : 1, "<html> tag is missing a 'lang' attribute.", "Add lang=\"en\" (or appropriate language code) to <html> for accessibility and SEO.", "HTML accessibility", null, "warning");
         }
         // Duplicate id attributes
-        const idMatches = [...fullCode.matchAll(/\bid\s*=\s*["']([^"']+)["']/gi)];
+        // Duplicate ids are reported by scanHtmlAdvanced, which shares the robust
+        // HTML tokenizer. Keep this pass free of a second duplicate-id diagnostic.
+        const idMatches = [];
         const idSeen = new Map();
         for (const m of idMatches) {
             const idVal = m[1];
@@ -49,10 +55,10 @@ JungleScanner.scanHtmlPatterns = function (lines) {
             const lineNum = idx + 1;
             const lowerLine = line.toLowerCase();
             // Missing alt on <img>
-            const imgMatches = [...line.matchAll(/<img\b([^>]*)>/gi)];
-            for (const m of imgMatches) {
-                if (!/\balt\s*=/i.test(m[1])) {
-                    e(lineNum, "<img> tag is missing an `alt` attribute.", "Add alt=\"description\" for accessibility.", "HTML accessibility", m.index + 1, "warning");
+            const tokensOnLine = htmlTokens.filter(token => token.index >= lineOffsets[idx] && token.index < lineOffsets[idx] + line.length && !token.closing);
+            for (const token of tokensOnLine.filter(item => item.name === 'img')) {
+                if (!/\balt\s*=/i.test(token.attrs || '')) {
+                    e(lineNum, "<img> tag is missing an `alt` attribute.", "Add alt=\"description\" for accessibility.", "HTML accessibility", token.index - lineOffsets[idx] + 1, "warning");
                 }
             }
             // Deprecated tags
@@ -75,50 +81,48 @@ JungleScanner.scanHtmlPatterns = function (lines) {
                 e(lineNum, "<a href=\"#\"> is a placeholder link with no real destination.", "Replace '#' with a real URL or use a <button> for click handlers.", "HTML quality", null, "info");
             }
             // NEW: <input> without type attribute
-            const inputMatches = [...line.matchAll(/<input\b([^>]*)>/gi)];
-            for (const m of inputMatches) {
-                if (!/\btype\s*=/i.test(m[1])) {
+            for (const token of tokensOnLine.filter(item => item.name === 'input')) {
+                if (!/\btype\s*=/i.test(token.attrs || '')) {
                     e(lineNum, "<input> is missing a 'type' attribute — defaults to 'text' but is ambiguous.", "Add type=\"text\", type=\"email\", type=\"checkbox\", etc. to be explicit.", "HTML quality", null, "info");
                 }
             }
             // NEW: <form> without action or onsubmit
-            const formMatches = [...line.matchAll(/<form\b([^>]*)>/gi)];
-            for (const m of formMatches) {
-                if (!/\b(action|onsubmit)\s*=/i.test(m[1])) {
+            for (const token of tokensOnLine.filter(item => item.name === 'form')) {
+                if (!/\b(action|onsubmit)\s*=/i.test(token.attrs || '')) {
                     e(lineNum, "<form> has no 'action' or 'onsubmit' — form submission may go nowhere.", "Add an action URL or onsubmit handler to process the form data.", "HTML quality", null, "info");
                 }
             }
             // <button> without type inside a <form> — outside a form, the default is harmless
             const btnMatches = [...line.matchAll(/<button\b([^>]*)>/gi)];
-            const inForm = /<form[\s>]/i.test(fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0));
+            const inForm = /<form[\s>]/i.test(fullCode.slice(0, lineOffsets[idx]));
             for (const m of btnMatches) {
                 if (!/\btype\s*=/i.test(m[1]) && inForm) {
                     e(lineNum, "<button> missing a 'type' attribute inside a form — defaults to 'submit' and may submit unintentionally.", "Add type=\"button\" for action buttons or type=\"submit\" to be explicit.", "HTML quality", m.index + 1, "info");
                 }
             }
             // <script src> in <head> without defer or async (not at end of body where it's fine)
-            const extScriptMatches = [...line.matchAll(/<script\b([^>]*)>/gi)];
-            const inHead = /<head[\s>]/i.test(fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0) + line);
-            for (const m of extScriptMatches) {
-                if (/\bsrc\s*=/i.test(m[1]) && !/\bdefer\b|\basync\b/i.test(m[1]) && !/\btype\s*=\s*["']module["']/i.test(m[1])) {
+            const extScriptMatches = tokensOnLine.filter(item => item.name === 'script');
+            const inHead = /<head[\s>]/i.test(fullCode.slice(0, lineOffsets[idx] + line.length));
+            for (const token of extScriptMatches) {
+                if (/\bsrc\s*=/i.test(token.attrs || '') && !/\bdefer\b|\basync\b/i.test(token.attrs || '') && !/\btype\s*=\s*["']module["']/i.test(token.attrs || '')) {
                     // Only flag if we're clearly still inside <head> — check that </head> hasn't appeared yet
-                    const beforeLine = fullCode.slice(0, fullCode.indexOf(line) >= 0 ? fullCode.indexOf(line) : 0);
+                    const beforeLine = fullCode.slice(0, lineOffsets[idx]);
                     if (!/<\/head>/i.test(beforeLine) && /<head[\s>]/i.test(beforeLine)) {
-                        e(lineNum, "<script src> in <head> without 'defer' or 'async' blocks HTML parsing until the script downloads.", "Add the 'defer' attribute to load the script after the document is parsed.", "HTML performance", m.index + 1, "info");
-                    }
-                }
-            }
-            // <label> without for attribute and not wrapping an input
-            const labelMatches = [...line.matchAll(/<label\b([^>]*)>/gi)];
-            for (const m of labelMatches) {
-                if (!/\bfor\s*=/i.test(m[1]) && !/\bhtmlfor\s*=/i.test(m[1])) {
-                    const labelContent = line.slice(m.index);
-                    if (!/<input\b/i.test(labelContent) && !/<select\b/i.test(labelContent) && !/<textarea\b/i.test(labelContent)) {
-                        e(lineNum, "<label> has no 'for' attribute linking it to an input.", "Add for=\"inputId\" matching the id of the associated input element.", "HTML accessibility", m.index + 1, "info");
+                        e(lineNum, "<script src> in <head> without 'defer' or 'async' blocks HTML parsing until the script downloads.", "Add the 'defer' attribute to load the script after the document is parsed.", "HTML performance", token.index - lineOffsets[idx] + 1, "info");
                     }
                 }
             }
         });
+        // A label may wrap its control across several lines. Inspect the complete
+        // element rather than only the line containing the opening tag.
+        for (const match of fullCode.matchAll(/<label\b([^>]*)>([\s\S]*?)<\/label\s*>/gi)) {
+            const attrs = match[1] || '';
+            const content = match[2] || '';
+            if (!/\bfor\s*=|\bhtmlfor\s*=/i.test(attrs) && !/<(?:input|select|textarea)\b/i.test(content)) {
+                const lineNum = fullCode.slice(0, match.index).split('\n').length;
+                e(lineNum, "<label> has no 'for' attribute linking it to an input.", "Add for=\"inputId\" matching the id of the associated input element.", "HTML accessibility", 1, "info");
+            }
+        }
         return issues;
     }
     // Additional HTML checks: broken references, duplicate attributes, unsafe URLs,
@@ -135,13 +139,13 @@ JungleScanner.scanHtmlAdvanced = function (lines) {
         const unquote = value => value == null ? '' : value.replace(/^["']|["']$/g, '');
         const ids = new Map();
         const references = [];
-        const tagRe = /<([A-Za-z][\w:-]*)(\s[^<>]*?)?\/?>/g;
         const tagCounts = new Map();
-        let tagMatch;
-        while ((tagMatch = tagRe.exec(code)) !== null) {
-            const tagName = tagMatch[1].toLowerCase();
-            const attrs = tagMatch[2] || '';
-            const raw = tagMatch[0];
+        const tagTokens = this.tokenizeHtml(code);
+        for (const tagMatch of tagTokens) {
+            if (tagMatch.closing) continue;
+            const tagName = tagMatch.name;
+            const attrs = tagMatch.attrs || '';
+            const raw = tagMatch.raw;
             const tagOffset = tagMatch.index;
             tagCounts.set(tagName, (tagCounts.get(tagName) || 0) + 1);
             const entries = [];
@@ -272,21 +276,23 @@ JungleScanner.scanHtmlEmbeddedCode = function (lines) {
         const issues = [];
         const code = lines.join('\n');
         const shift = (found, startLine) => found.map(issue => ({ ...issue, line: issue.line + startLine - 1 }));
-        const scriptRe = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
-        let match;
-        while ((match = scriptRe.exec(code)) !== null) {
-            const attrs = match[1] || '';
+        const tokens = this.tokenizeHtml(code);
+        for (let index = 0; index < tokens.length; index++) {
+            const token = tokens[index];
+            if (token.closing || !/^(script|style)$/i.test(token.name)) continue;
+            const close = tokens.slice(index + 1).find(candidate => candidate.closing && candidate.name === token.name);
+            if (!close) continue;
+            const content = code.slice(token.index + token.raw.length, close.index);
+            const attrs = token.attrs || '';
             if (/\bsrc\s*=/i.test(attrs)) continue;
             const type = (attrs.match(/\btype\s*=\s*["']([^"']+)["']/i) || [])[1] || '';
-            if (type && !/(?:javascript|ecmascript|module)/i.test(type)) continue;
-            const startLine = code.slice(0, match.index + match[0].indexOf('>') + 1).split('\n').length;
-            issues.push(...shift(this.scanJavaScriptTypeScript(match[2].split('\n'), 'Javascript'), startLine));
-        }
-        const styleRe = /<style\b[^>]*>([\s\S]*?)<\/style\s*>/gi;
-        while ((match = styleRe.exec(code)) !== null) {
-            const startLine = code.slice(0, match.index + match[0].indexOf('>') + 1).split('\n').length;
-            const styleLines = match[1].split('\n');
-            issues.push(...shift([...this.scanCssPatterns(styleLines), ...this.scanCssAdvanced(styleLines)], startLine));
+            const startLine = code.slice(0, token.index + token.raw.length).split('\n').length;
+            if (token.name === 'script') {
+                if (type && !/(?:javascript|ecmascript|module)/i.test(type)) continue;
+                issues.push(...shift(this.scanJavaScriptTypeScript(content.split('\n'), 'Javascript'), startLine));
+            } else {
+                issues.push(...shift([...this.scanCssPatterns(content.split('\n')), ...this.scanCssAdvanced(content.split('\n'))], startLine));
+            }
         }
         return issues;
     }
@@ -433,8 +439,10 @@ JungleScanner.scanSql = function (lines) {
             if (/\bIN\s*\(\s*\)/.test(upper) || /\bVALUES\s*\(\s*\)/.test(upper)) {
                 e(startOffset, "Empty IN or VALUES list is invalid SQL.", "Provide at least one value or handle the empty collection before building the query.", "SQL syntax", "error");
             }
-            if (/\bLIMIT\s*-\d+\b|\bOFFSET\s*-\d+\b/.test(upper)) {
-                e(startOffset, "LIMIT/OFFSET cannot use a negative value.", "Use a non-negative integer or validate the pagination input.", "SQL syntax", "error");
+            // SQLite intentionally uses LIMIT -1 to mean "all remaining rows".
+            // OFFSET remains invalid when negative across the supported dialects.
+            if (/\bOFFSET\s*-\d+\b/.test(upper)) {
+                e(startOffset, "OFFSET cannot use a negative value.", "Use a non-negative integer or validate the pagination input.", "SQL syntax", "error");
             }
             if (/\bBETWEEN\b/.test(upper)) {
                 const between = upper.indexOf('BETWEEN');
@@ -521,7 +529,7 @@ JungleScanner.scanSql = function (lines) {
             if (/^ALTER\s+TABLE\b/.test(upper) && !/\b(?:ADD|ALTER|DROP|RENAME)\b/.test(upper)) e(startOffset, "ALTER TABLE has no schema change operation.", "Add ADD, ALTER, DROP, or RENAME with the intended change.", "SQL syntax", "error");
 
             const unionParts = upper.split(/\bUNION(?:\s+ALL)?\b/);
-            if (unionParts.length > 2) {
+            if (unionParts.length > 1) {
                 const counts = unionParts.map(part => {
                     const select = part.match(/\bSELECT\b([\s\S]*?)(?:\bFROM\b|$)/);
                     return select ? splitTopLevel(select[1]).length : 0;
@@ -543,11 +551,37 @@ JungleScanner.scanCssAdvanced = function (lines) {
         let hasColor = false;
         let hasBgColor = false;
         const vendorPrefixProps = {};
+        const standardProps = new Set();
+        // Handle compact one-line rules separately; the line-oriented tracker
+        // below only sees braces when they occupy their own lines.
+        lines.forEach((line, index) => {
+            for (const block of line.matchAll(/\{([^{}]*)\}/g)) {
+                const declarations = (block[1] || '').split(';').map(part => part.trim()).filter(Boolean);
+                const props = new Set();
+                let display = '';
+                let hasWidth = false;
+                for (const declaration of declarations) {
+                    const match = declaration.match(/^([\w-]+)\s*:\s*(.*)$/);
+                    if (!match) continue;
+                    const prop = match[1].toLowerCase();
+                    const value = match[2];
+                    if (props.has(prop)) e(index + 1, `Duplicate CSS property '${prop}' in the same rule block.`, `Remove or merge the duplicate '${prop}' declaration — the second one overrides the first.`, "CSS quality", null, "warning");
+                    props.add(prop);
+                    if (prop === 'display') display = value.toLowerCase();
+                    if (prop === 'width') hasWidth = true;
+                    if (!prop.startsWith('-')) standardProps.add(prop);
+                }
+                if (declarations.some(part => /^margin\s*:[^;]*\bauto\b/i.test(part)) && !hasWidth && !/\b(?:flex|grid)\b/.test(display)) {
+                    e(index + 1, "'margin: auto' is set but no 'width' is defined in this rule block.", "margin: auto only centers block elements that have an explicit width.", "CSS layout", null, "info");
+                }
+            }
+        });
         // Track per-rule-block state for duplicate property and margin:auto checks
         let inBlock = false;
         let blockProps = new Map(); // prop -> first line seen
         let blockStartLine = -1;
         let blockHasWidth = false;
+        let blockHasAutoLayout = false;
         let marginAutoLine = -1;
         lines.forEach((line, idx) => {
             const lineNum = idx + 1;
@@ -571,6 +605,7 @@ JungleScanner.scanCssAdvanced = function (lines) {
             const standardMatch = trimmed.match(/^([a-z][a-z-]+)\s*:/i);
             if (standardMatch && !/^-/.test(trimmed)) {
                 const prop = standardMatch[1];
+                standardProps.add(prop);
                 if (vendorPrefixProps[prop]) vendorPrefixProps[prop].hasStandard = true;
             }
             // Block tracking for duplicate properties, margin:auto, z-index, float, 0px
@@ -579,15 +614,17 @@ JungleScanner.scanCssAdvanced = function (lines) {
                 blockProps = new Map();
                 blockStartLine = lineNum;
                 blockHasWidth = false;
+                blockHasAutoLayout = false;
                 marginAutoLine = -1;
             } else if (trimmed === '}') {
                 // Check margin:auto without width
-                if (marginAutoLine > 0 && !blockHasWidth) {
+                if (marginAutoLine > 0 && !blockHasWidth && !blockHasAutoLayout) {
                     e(marginAutoLine, "'margin: auto' is set but no 'width' is defined in this rule block.", "margin: auto only centers block elements that have an explicit width.", "CSS layout", null, "info");
                 }
                 inBlock = false;
                 blockProps = new Map();
                 blockHasWidth = false;
+                blockHasAutoLayout = false;
                 marginAutoLine = -1;
             }
             if (inBlock && trimmed.includes(':') && !trimmed.startsWith('//') && !trimmed.startsWith('/*')) {
@@ -602,6 +639,7 @@ JungleScanner.scanCssAdvanced = function (lines) {
                     }
                     // Track width
                     if (prop === 'width') blockHasWidth = true;
+                    if (prop === 'display' && /\b(?:flex|grid)\b/i.test(trimmed)) blockHasAutoLayout = true;
                     // Track margin:auto
                     if (prop === 'margin' && /:\s*auto\b/i.test(trimmed)) marginAutoLine = lineNum;
                     // NEW: z-index > 9000
@@ -648,7 +686,7 @@ JungleScanner.scanCssAdvanced = function (lines) {
         }
         // Report vendor prefixes without standard property
         for (const [prop, info] of Object.entries(vendorPrefixProps)) {
-            if (!info.hasStandard) {
+            if (!info.hasStandard && !standardProps.has(prop)) {
                 e(info.lines[0], `Vendor-prefixed property '-*-${prop}' has no standard '${prop}' fallback.`, `Add the standard \`${prop}\` property after the vendor-prefixed versions.`, "CSS compatibility", null, "warning");
             }
         }

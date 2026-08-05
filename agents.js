@@ -230,13 +230,35 @@
         if (panel.classList.contains('open') && apiKey) setTimeout(() => input.focus(), 30);
     };
     document.getElementById('agent-close').onclick = () => { panel.classList.remove('open'); toggle.classList.remove('active'); };
-    status.onclick = () => {
-        const shouldOpen = connect.classList.contains('hidden');
-        connect.classList.toggle('hidden', !shouldOpen);
-        connect.setAttribute('aria-hidden', String(!shouldOpen));
-        status.setAttribute('aria-expanded', String(shouldOpen));
-        if (shouldOpen) setTimeout(() => keyInput.focus(), 30);
+    // Keep the API-key control usable even if another workspace initializer
+    // replaces a button handler later in the page lifecycle.  The delegated
+    // listener below is intentionally scoped to this control, so it does not
+    // interfere with the editor's other buttons.
+    const setConnectionFormOpen = open => {
+        if (open) {
+            panel.classList.add('open');
+            toggle.classList.add('active');
+        }
+        connect.classList.toggle('hidden', !open);
+        connect.setAttribute('aria-hidden', String(!open));
+        status.setAttribute('aria-expanded', String(open));
+        if (open) setTimeout(() => keyInput.focus(), 30);
     };
+    const toggleConnectionForm = event => {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        setConnectionFormOpen(connect.classList.contains('hidden'));
+    };
+    status.addEventListener('click', toggleConnectionForm);
+    // This also covers a host page that re-renders the status button after
+    // Jungle Agents initializes and therefore drops the direct listener.
+    document.addEventListener('click', event => {
+        const target = event.target instanceof Element ? event.target.closest('#agent-status') : null;
+        if (target && target === document.getElementById('agent-status')) toggleConnectionForm(event);
+    });
+    status.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') toggleConnectionForm(event);
+    });
     document.getElementById('agent-expand').onclick = event => {
         panel.classList.toggle('expanded');
         event.currentTarget.textContent = panel.classList.contains('expanded') ? '↓' : '↑';

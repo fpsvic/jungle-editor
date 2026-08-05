@@ -21,7 +21,15 @@ class JungleAstScanner {
     static async scan(name, source) {
         const Parser = await this.parser(), parser = new Parser(); parser.setLanguage(await this.language(name));
         const tree = parser.parse(String(source || '')), issues = [];
-        const visit = node => { if (node.type === 'ERROR' || node.isMissing) { const p = node.startPosition; issues.push({ line:p.row+1, column:p.column+1, severity:'error', kind:'AST syntax', msg:node.isMissing ? 'Missing required syntax.' : 'Invalid syntax.', hint:'Fix the highlighted syntax.' }); return; } for (const child of node.children) visit(child); };
+        const visit = node => {
+            if (node.type === 'ERROR' || node.isMissing) {
+                const p = node.startPosition;
+                issues.push({ line:p.row+1, column:p.column+1, severity:'error', kind:'AST syntax', msg:node.isMissing ? 'Missing required syntax.' : 'Invalid syntax.', hint:'Fix the highlighted syntax.' });
+            }
+            // Do not stop at the first ERROR node: malformed parents often contain
+            // additional independent errors in their descendants.
+            for (const child of node.children || []) visit(child);
+        };
         visit(tree.rootNode); tree.delete?.(); parser.delete?.(); return issues;
     }
 }

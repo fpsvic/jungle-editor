@@ -12,8 +12,12 @@
 // cross-file checks (undefined function calls); single-file JS/TS is left alone. Python
 // gets full undefined-name detection since there's no offline compiler for it.
 class JungleAnalyzer {
+    static normalizeLanguage(lang) {
+        return String(lang || '') === 'JavaScript' || String(lang || '') === 'JS' ? 'Javascript' : lang;
+    }
     // ---- Public entry: returns issues for `currentFile`, using the whole project ----
     static analyze(lang, files, currentFile) {
+        lang = this.normalizeLanguage(lang);
         try {
             files = files || {};
             if (!(currentFile in files)) files = { [currentFile || 'file']: files[currentFile] ?? '' };
@@ -29,7 +33,7 @@ class JungleAnalyzer {
             return [...projectReferences, ...topology];
         } catch (e) {
             // Never let analysis crash the editor — degrade to "no findings".
-            return [];
+            return [this.makeIssue(1, 'Analyzer could not complete for this file.', 'Check the project file contents and try the analysis again.', 'Analyzer', 'warning')];
         }
     }
 
@@ -42,8 +46,8 @@ class JungleAnalyzer {
         const out = {};
         for (const name of Object.keys(files)) {
             const l = (typeof JungleIntelligence !== 'undefined')
-                ? JungleIntelligence.languageFromFilename(name, lang)
-                : lang;
+                ? JungleIntelligence.languageFromFilename(name, null)
+                : null;
             if (l === lang) out[name] = files[name];
         }
         if (!(currentFile in out)) out[currentFile] = files[currentFile] ?? '';
@@ -110,11 +114,40 @@ class JungleAnalyzer {
         const lines = stripped.split('\n');
 
         // `from x import *` makes any name potentially defined — disable undefined checks.
-        if (/^\s*from\s+[\w.]+\s+import\s+\*/m.test(stripped)) return [];
+        const hasWildcardImport = /^\s*from\s+[\w.]+\s+import\s+\*/m.test(stripped);
 
-        const bound = new Set();       // every name bound anywhere in this file (any scope)
+        const bound = new Set();
         const imported = new Set();    // names introduced by import statements
         this.collectPythonBindings(stripped, bound, imported);
+        const topLevelBound = new Set(imported);
+        const linesForScope = stripped.split('\n');
+        for (const sourceLine of linesForScope) {
+            if (/^\s/.test(sourceLine)) continue;
+            const def = sourceLine.match(/^(?:async\s+)?def\s+([A-Za-z_]\w*)/);
+            const cls = sourceLine.match(/^class\s+([A-Za-z_]\w*)/);
+            const assignment = sourceLine.match(/^([A-Za-z_]\w*)\s*(?::[^=\n]+)?=(?!=)/);
+            if (def) topLevelBound.add(def[1]);
+            if (cls) topLevelBound.add(cls[1]);
+            if (assignment) topLevelBound.add(assignment[1]);
+        }
+        const scopes = [];
+        for (let i = 0; i < linesForScope.length; i++) {
+            const header = linesForScope[i].match(/^(\s*)(?:async\s+)?def\s+[A-Za-z_]\w*\s*\(([^)]*)/);
+            if (!header) continue;
+            const indent = header[1].length;
+            const locals = new Set();
+            this.addPyParams(header[2], locals);
+            let end = linesForScope.length - 1;
+            for (let j = i + 1; j < linesForScope.length; j++) {
+                if (linesForScope[j].trim() && linesForScope[j].match(/^\s*/)[0].length <= indent) { end = j - 1; break; }
+                if (/^\s+/.test(linesForScope[j])) {
+                    const local = new Set();
+                    this.collectPythonBindings(linesForScope[j], local, new Set());
+                    for (const name of local) locals.add(name);
+                }
+            }
+            scopes.push({ start: i, end, indent, locals });
+        }
 
         // Sibling files: top-level def/class/assignment names, for "defined elsewhere" hints.
         const siblings = this.siblingsOfLang('Python', files, currentFile);
@@ -132,6 +165,10 @@ class JungleAnalyzer {
 
         for (let li = 0; li < lines.length; li++) {
             const raw = lines[li];
+            if (hasWildcardImport) continue;
+            const indent = (raw.match(/^\s*/) || [''])[0].length;
+            const visible = new Set(topLevelBound);
+            for (const scope of scopes) if (li >= scope.start && li <= scope.end && indent > scope.indent) for (const name of scope.locals) visible.add(name);
             // import/from/global/nonlocal lines introduce names — they are not "uses".
             if (/^\s*(?:import|from|global|nonlocal)\b/.test(raw)) continue;
             const idRe = /[A-Za-z_]\w*/g;
@@ -148,7 +185,7 @@ class JungleAnalyzer {
                 const after = raw.slice(start + name.length);
                 if (/^\s*=(?!=)/.test(after)) continue;
                 // Skip 'NAME:' type annotations / dict-ish only when it's an annotation target at stmt start.
-                if (bound.has(name) || imported.has(name) || builtins.has(name)) continue;
+                if (visible.has(name) || imported.has(name) || builtins.has(name)) continue;
                 const key = name + ':' + (li + 1);
                 if (reported.has(key)) continue;
                 reported.add(key);
@@ -264,12 +301,6 @@ class JungleAnalyzer {
     static analyzeJsCrossFile(lang, files, currentFile) {
         const siblings = this.siblingsOfLang(lang, files, currentFile);
         if (Object.keys(siblings).length < 2) return []; // single file: leave symbol checks to tsc
-        // Once a project imports a package outside the workspace, unknown bare calls may
-        // legitimately come from that package or its framework globals. Do not guess in
-        // that situation; the local-import pass below still checks relative file paths.
-        const externalImport = /\b(?:import\s+(?:[^'";]+?\s+from\s+)?|require\s*\(\s*)["'](?!\.\.?\/)([^"']+)["']/;
-        if (Object.values(siblings).some(content => externalImport.test(String(content || '')))) return [];
-
         const defined = new Set();
         const imported = new Set();
         for (const content of Object.values(siblings)) {
@@ -379,9 +410,11 @@ class JungleAnalyzer {
         const line = String(files[currentFile] || '').slice(0, offset).split('\n').length;
         const beforeLine = String(files[currentFile] || '').slice(0, offset);
         const column = offset - beforeLine.lastIndexOf('\n');
-        return this.makeIssue(line, label + " references missing project path '" + specifier + "'.",
+        const issue = this.makeIssue(line, label + " references missing project path '" + specifier + "'.",
             "Add " + resolved + " to the project, correct the path, or leave it dynamic if it is supplied by the host.",
-            'Missing project asset', 'warning', column);
+            'Missing project asset', 'warning');
+        issue.column = column;
+        return issue;
     }
 
     static analyzeLocalImports(lang, files, currentFile) {
@@ -414,7 +447,9 @@ class JungleAnalyzer {
         while ((match = assetRe.exec(code)) !== null) {
             const tag = match[1].toLowerCase();
             const specifier = match[3];
-            const isKnownAsset = new Set(['script', 'link', 'img', 'source', 'video', 'audio', 'iframe', 'form']).has(tag);
+            // A form action is often an application route handled by a server or
+            // router, not a project file. Only inspect actual asset-bearing tags.
+            const isKnownAsset = new Set(['script', 'link', 'img', 'source', 'video', 'audio', 'iframe']).has(tag);
             if (!isKnownAsset || !/^\.\.?\//.test(specifier)) continue;
             const issue = this.missingPathIssue(files, currentFile, specifier, match.index, 'asset', '<' + tag + '> ' + match[2]);
             if (!issue) continue;

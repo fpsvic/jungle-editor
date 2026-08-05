@@ -1,5 +1,10 @@
 class JungleScanner {
+    static normalizeLanguage(lang) {
+        const aliases = { JavaScript: 'Javascript', JS: 'Javascript', TypeScript: 'TypeScript', TS: 'TypeScript' };
+        return aliases[String(lang || '')] || lang;
+    }
     static scan(lang, code) {
+        lang = this.normalizeLanguage(lang);
         const lines = code.split('\n');
         const issues = [
             ...this.scanDelimiters(lines, lang),
@@ -18,7 +23,8 @@ class JungleScanner {
     }
     // Async chunked scan — processes 200 lines at a time, yielding between chunks
     // Falls back to sync scan() for files under 500 lines
-    static scanAsync(lang, code) {
+    static scanAsyncLegacy(lang, code) {
+        lang = this.normalizeLanguage(lang);
         // Tree-sitter provides authoritative syntax structure. The legacy rules
         // remain a no-network fallback and continue to supply style/security hints.
         if (typeof JungleAstScanner !== 'undefined' && JungleAstScanner.names[lang]) {
@@ -26,7 +32,7 @@ class JungleScanner {
             // AST used to replace the rule scan here, which silently hid security and
             // project-quality findings whenever Tree-sitter was available.
             return Promise.all([
-                JungleAstScanner.scan(lang, code).catch(() => []),
+                JungleAstScanner.scan(lang, code).catch(() => [{ line: 1, column: 1, severity: 'info', kind: 'Scanner integration', msg: 'AST scanner unavailable; heuristic checks were used instead.', hint: 'Reconnect or allow the bundled grammar resources if structural diagnostics are needed.' }]),
                 Promise.resolve(this.scan(lang, code))
             ]).then(([astIssues, ruleIssues]) => this.finalizeIssues([...astIssues, ...ruleIssues], lang, code.split('\n').length));
         }
@@ -70,6 +76,51 @@ class JungleScanner {
             setTimeout(processChunk, 0);
         });
     }
+    // Cooperative scanner used by live analysis and whole-project scans. Large files
+    // run line-oriented checks in real chunks, while structural checks retain the full
+    // source context and execute once after the chunks finish.
+    static scanAsync(lang, code) {
+        lang = this.normalizeLanguage(lang);
+        const lines = String(code || '').split('\n');
+        const runStructural = () => {
+            const issues = [...this.scanDelimiters(lines, lang)];
+            if (lang === 'Javascript' || lang === 'TypeScript') issues.push(...this.scanJavaScriptTypeScript(lines, lang));
+            if (lang === 'HTML') issues.push(...this.scanHtmlTags(lines), ...this.scanHtmlPatterns(lines), ...this.scanHtmlAdvanced(lines), ...this.scanHtmlEmbeddedCode(lines));
+            if (lang === 'SQL') issues.push(...this.scanSql(lines));
+            if (lang === 'Python') issues.push(...this.scanPythonIndentation(lines));
+            if (lang === 'CSS') issues.push(...this.scanCssPatterns(lines), ...this.scanCssAdvanced(lines));
+            issues.push(...this.scanUniversalAdvanced(lang, lines), ...this.scanLanguageGuardrails(lang, lines));
+            return issues;
+        };
+        if (lines.length <= 500) return Promise.resolve(this.scan(lang, String(code || '')));
+        return new Promise(resolve => {
+            const CHUNK = 200;
+            const CONTEXT = 24;
+            const issues = [];
+            let start = 0;
+            const process = () => {
+                const end = Math.min(start + CHUNK, lines.length);
+                const contextStart = Math.max(0, start - CONTEXT);
+                const chunkLines = lines.slice(contextStart, Math.min(lines.length, end + CONTEXT));
+                const addChunk = found => {
+                    for (const issue of found) {
+                        const absoluteLine = issue.line + contextStart;
+                        if (absoluteLine >= start + 1 && absoluteLine <= end) issues.push({ ...issue, line: absoluteLine });
+                    }
+                };
+                addChunk(this.scanLanguagePatterns(lang, chunkLines));
+                addChunk(this.scanUniversal(lang, chunkLines));
+                start = end;
+                if (start < lines.length) { setTimeout(process, 0); return; }
+                const astPromise = typeof JungleAstScanner !== 'undefined' && JungleAstScanner.names[lang]
+                    ? JungleAstScanner.scan(lang, String(code || '')).catch(() => [{ line: 1, column: 1, severity: 'info', kind: 'Scanner integration', msg: 'AST scanner unavailable; heuristic checks were used instead.', hint: 'Reconnect or allow the bundled grammar resources if structural diagnostics are needed.' }])
+                    : Promise.resolve([]);
+                astPromise.then(astIssues => resolve(this.finalizeIssues([...astIssues, ...issues, ...runStructural()], lang, lines.length)));
+            };
+            setTimeout(process, 0);
+        });
+    }
+
     static scanPythonIndentation(lines) {
         const issues = [];
         const depths = this.computeBracketDepths(lines);
@@ -114,11 +165,10 @@ class JungleScanner {
         // scanner also reports style, security, performance, accessibility, and semantic
         // heuristics; those are useful warnings but are too context-dependent to present
         // as hard errors on otherwise valid programs.
-        const hardErrorKind = kind => /syntax|indentation|delimiter|unclosed|string check|comment check|html structure|compile/i.test(String(kind || ''));
+        const hardErrorKind = kind => /syntax|indentation|delimiter|unclosed|string check|comment check|html structure|compile|runtime|type error|ast syntax|javascript error/i.test(String(kind || ''));
         const normalized = issues.map(issue => {
             // TypeScript scanner rules are only hints. The bundled TypeScript
             // compiler supplies the authoritative diagnostics during execution.
-            if (lang === 'TypeScript' && issue.severity === 'error') return { ...issue, severity: 'warning' };
             if (issue.severity === 'error' && !hardErrorKind(issue.kind)) return { ...issue, severity: 'warning' };
             return issue;
         });
@@ -126,7 +176,17 @@ class JungleScanner {
             // A diagnostic must refer to a real source line.  Some heuristic rules
             // inspect look-ahead state; never expose a synthetic/out-of-file line.
             if (lineCount !== null && Number.isFinite(Number(issue.line)) && (Number(issue.line) < 1 || Number(issue.line) > lineCount)) return false;
-            const key = `${issue.line ?? 0}|${issue.column ?? 0}|${issue.kind ?? ''}|${issue.msg ?? ''}`;
+            const rawMessage = String(issue.msg || '').toLowerCase();
+            let fingerprint = rawMessage
+                .replace(/duplicate\s+id(?:\s*=\s*["']?)[^\s"']+/i, 'duplicate id')
+                .replace(/empty\s+catch[^.]*|catch\s+block[^.]*swallow[^.]*/i, 'empty catch block')
+                .replace(/unwrap\(\)[^.]*|value\s+is\s+none\s+or\s+err/i, 'unwrap panic')
+                .replace(/(?:go\s+)?error(?:\s+return\s+value)?[^.]*checked|error result[^.]*ignored/i, 'unchecked go error')
+                .replace(/\s+/g, ' ').trim();
+            if (/\bunwrap\s*\(/i.test(rawMessage)) fingerprint = 'rust unwrap';
+            if (/\bcatch\b.*\b(?:empty|swallow|silently|hides?)\b/i.test(rawMessage)) fingerprint = 'empty catch block';
+            if (/\b(?:err|error)\b.*(?:checked|ignored)/i.test(rawMessage)) fingerprint = 'unchecked go error';
+            const key = `${issue.line ?? 0}|${fingerprint}`;
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
@@ -169,7 +229,9 @@ class JungleScanner {
                 }
             }
             // Property declarations inside a rule must end with ';'
-            if (braceDepth > 0 && trimmed && !trimmed.startsWith('/*') && !trimmed.startsWith('//') && !trimmed.endsWith('{') && !trimmed.endsWith('}') && !trimmed.endsWith(';') && !trimmed.endsWith(',') && trimmed.includes(':')) {
+            const nextCssLine = lines.slice(i + 1).find(candidate => candidate.trim());
+            const declarationClosesBlock = nextCssLine && /^\s*}/.test(nextCssLine);
+            if (braceDepth > 0 && trimmed && !trimmed.startsWith('/*') && !trimmed.startsWith('//') && !trimmed.endsWith('{') && !trimmed.endsWith('}') && !trimmed.endsWith(';') && !trimmed.endsWith(',') && trimmed.includes(':') && !declarationClosesBlock) {
                 issues.push(this.makeIssue(lineNum, `CSS property declaration may be missing a semicolon.`, "Add ';' at the end of this property declaration.", "CSS syntax", null, "warning"));
             }
             // Detect a selector line followed by nothing (likely forgot brace)
@@ -460,35 +522,117 @@ class JungleScanner {
         }
         return errors;
     }
+    // Tokenize HTML without treating `>` inside quoted attributes as the end of a
+    // tag. Script/style bodies are raw text in HTML, so their contents are skipped;
+    // this prevents strings such as `const markup = "<div>"` from becoming tags.
+    static tokenizeHtml(code) {
+        const tokens = [];
+        let i = 0;
+        let rawTextTag = null;
+        const pushToken = (start, end, name, attrs, closing, selfClosing) => tokens.push({
+            raw: code.slice(start, end), index: start, name: name.toLowerCase(), attrs: attrs || '',
+            closing: !!closing, selfClosing: !!selfClosing
+        });
+        while (i < code.length) {
+            if (rawTextTag) {
+                const close = new RegExp(`<\\/\\s*${rawTextTag}\\b`, 'ig');
+                close.lastIndex = i;
+                const match = close.exec(code);
+                if (!match) break;
+                i = match.index;
+                rawTextTag = null;
+            }
+            if (code.slice(i, i + 4) === '<!--') {
+                const end = code.indexOf('-->', i + 4);
+                i = end < 0 ? code.length : end + 3;
+                continue;
+            }
+            if (code[i] !== '<') { i++; continue; }
+            const rest = code.slice(i);
+            const doctype = rest.match(/^<!doctype\b/i);
+            if (doctype) {
+                let j = i + doctype[0].length, quote = null;
+                for (; j < code.length; j++) {
+                    const ch = code[j];
+                    if (quote) { if (ch === quote) quote = null; continue; }
+                    if (ch === '"' || ch === "'") { quote = ch; continue; }
+                    if (ch === '>') { j++; break; }
+                }
+                i = j; continue;
+            }
+            const head = rest.match(/^<\s*(\/?)\s*([A-Za-z][\w:-]*)/);
+            if (!head) { i++; continue; }
+            const start = i;
+            const closing = !!head[1];
+            const name = head[2];
+            let j = i + head[0].length, quote = null;
+            for (; j < code.length; j++) {
+                const ch = code[j];
+                if (quote) { if (ch === quote) quote = null; continue; }
+                if (ch === '"' || ch === "'") { quote = ch; continue; }
+                if (ch === '>') { j++; break; }
+            }
+            if (j > code.length || code[j - 1] !== '>') { i++; continue; }
+            const raw = code.slice(start, j);
+            const attrStart = head[0].length;
+            const attrEnd = raw.length - 1 - (raw.endsWith('/>') ? 1 : 0);
+            const attrs = closing ? '' : raw.slice(attrStart, Math.max(attrStart, attrEnd));
+            const selfClosing = /\/\s*>$/.test(raw);
+            pushToken(start, j, name, attrs, closing, selfClosing);
+            i = j;
+            if (!closing && !selfClosing && /^(script|style)$/i.test(name)) rawTextTag = name.toLowerCase();
+        }
+        return tokens;
+    }
+
     static scanHtmlTags(lines) {
         const errors = [];
         const stack = [];
         const voidTags = new Set(['area','base','br','col','embed','hr','img','input','link','meta','param','source','track','wbr']);
-        const tagRegex = /<!--[\s\S]*?-->|<!doctype[^>]*>|<\/?([a-zA-Z0-9:-]+)(?:\s[^>]*)?>/gi;
+        const optionalTags = new Set(['li','dt','dd','p','rt','rp','optgroup','option','thead','tbody','tfoot','tr','td','th','colgroup']);
         const code = lines.join('\n');
-        let match;
-        while ((match = tagRegex.exec(code)) !== null) {
-            const raw = match[0];
-            const tagName = match[1] ? match[1].toLowerCase() : null;
-            if (!tagName || raw.startsWith('<!--') || raw.toLowerCase().startsWith('<!doctype')) continue;
-            const before = code.slice(0, match.index);
+        const tokens = this.tokenizeHtml(code);
+        const impliedClose = (open, next) => {
+            if (open === 'p') return new Set(['address','article','aside','blockquote','div','dl','fieldset','footer','form','h1','h2','h3','h4','h5','h6','header','hgroup','hr','main','menu','nav','ol','p','pre','section','table','ul']).has(next);
+            if (open === 'li') return next === 'li';
+            if (open === 'dt' || open === 'dd') return next === 'dt' || next === 'dd';
+            if (open === 'rt' || open === 'rp') return next === 'rt' || next === 'rp';
+            if (open === 'option') return next === 'option' || next === 'optgroup';
+            if (open === 'optgroup') return next === 'optgroup';
+            if (open === 'tr') return next === 'tr';
+            if (open === 'td' || open === 'th') return next === 'td' || next === 'th';
+            if (open === 'thead') return next === 'tbody' || next === 'tfoot';
+            if (open === 'tbody') return next === 'tbody' || next === 'tfoot';
+            return false;
+        };
+        for (const token of tokens) {
+            const raw = token.raw;
+            const tagName = token.name;
+            const before = code.slice(0, token.index);
             const line = before.split('\n').length;
-            const column = match.index - before.lastIndexOf('\n');
-            const isClosing = raw.startsWith('</');
+            const column = token.index - before.lastIndexOf('\n');
+            const isClosing = token.closing;
             const isSelfClosing = raw.endsWith('/>') || voidTags.has(tagName);
             if (isClosing) {
-                const last = stack.pop();
-                if (!last) {
+                let matchIndex = -1;
+                for (let k = stack.length - 1; k >= 0; k--) if (stack[k].tag === tagName) { matchIndex = k; break; }
+                if (matchIndex < 0) {
                     errors.push(this.makeIssue(line, `Closing tag </${tagName}> has no matching opening tag.`, `Remove </${tagName}> or add <${tagName}> before it.`, "HTML structure", column));
-                } else if (last.tag !== tagName) {
-                    errors.push(this.makeIssue(line, `Closing tag </${tagName}> does not match <${last.tag}> from line ${last.line}.`, `Change this to </${last.tag}> or close <${last.tag}> before </${tagName}>.`, "HTML structure", column));
+                    continue;
                 }
+                while (stack.length - 1 > matchIndex) {
+                    const implicit = stack.pop();
+                    if (!optionalTags.has(implicit.tag)) errors.push(this.makeIssue(line, `Closing tag </${tagName}> does not match <${implicit.tag}> from line ${implicit.line}.`, `Change this to </${implicit.tag}> or close <${implicit.tag}> before </${tagName}>.`, "HTML structure", column));
+                }
+                stack.pop();
             } else if (!isSelfClosing) {
+                while (stack.length && optionalTags.has(stack[stack.length - 1].tag) && impliedClose(stack[stack.length - 1].tag, tagName)) stack.pop();
                 stack.push({ tag: tagName, line, column });
             }
         }
         while (stack.length > 0) {
             const unclosed = stack.pop();
+            if (optionalTags.has(unclosed.tag)) continue;
             errors.push(this.makeIssue(unclosed.line, `Unclosed HTML tag <${unclosed.tag}> detected.`, `Add </${unclosed.tag}> after this element's content.`, "HTML structure", unclosed.column));
         }
         return errors;
@@ -591,20 +735,67 @@ class JungleScanner {
         const issues = [];
         const code = lines.join('\n');
         const maskedLines = this.maskJavaScriptTypeScript(code).split('\n');
+        const maskedFull = maskedLines.join('\n');
         const e = (ln, msg, hint, kind, sev = 'warning', col = null) => issues.push(this.makeIssue(ln, msg, hint, kind, col, sev));
         const nextNonBlank = (idx) => {
             for (let j = idx + 1; j < lines.length; j++) if (maskedLines[j].trim()) return maskedLines[j].trim();
             return '';
+        };
+        const switchInfo = start => {
+            let depth = 0;
+            let started = false;
+            let end = maskedLines.length - 1;
+            const cases = [];
+            let hasDefault = false;
+            for (let j = start; j < maskedLines.length; j++) {
+                const text = maskedLines[j];
+                if (started && depth === 1) {
+                    for (const match of text.matchAll(/\bcase\s+(.+?)\s*:/g)) cases.push({ value: match[1].trim(), line: j + 1 });
+                    if (/\bdefault\s*:/.test(text)) hasDefault = true;
+                }
+                for (const ch of text) {
+                    if (ch === '{') { depth++; started = true; }
+                    else if (ch === '}' && started) { depth--; if (depth === 0) { end = j; break; } }
+                }
+                if (started && depth === 0) break;
+            }
+            return { cases, hasDefault, end };
         };
         const constDeclarations = [];
         for (let i = 0; i < maskedLines.length; i++) {
             const m = maskedLines[i].match(/^\s*const\s+([A-Za-z_$][\w$]*)\s*=/);
             if (m) constDeclarations.push({ name: m[1], line: i + 1 });
         }
+        // Scan object literals with a brace stack so duplicate keys are also found
+        // when the properties are spread across several lines.
+        const objectStack = [];
+        let codeOffset = 0;
+        for (let lineIndex = 0; lineIndex < maskedLines.length; lineIndex++) {
+            const maskedLine = maskedLines[lineIndex];
+            for (let pos = 0; pos < maskedLine.length; pos++) {
+                const ch = maskedLine[pos];
+                if (ch === '{') {
+                    const before = maskedFull.slice(Math.max(0, codeOffset + pos - 48), codeOffset + pos);
+                    objectStack.push({ object: /(?:=|:|,|\(|\[|\breturn)\s*$/.test(before), keys: new Set() });
+                } else if (ch === '}') {
+                    objectStack.pop();
+                }
+                const keyMatch = maskedLine.slice(pos).match(/^([A-Za-z_$][\w$]*)\s*:/);
+                const current = objectStack[objectStack.length - 1];
+                if (keyMatch && current?.object) {
+                    const key = keyMatch[1];
+                    const lineNum = lineIndex + 1;
+                    if (current.keys.has(key)) e(lineNum, "Duplicate object key '" + key + "'; the later value overwrites the earlier one.", "Rename or remove one of the duplicate keys.", "JavaScript logic", "warning");
+                    current.keys.add(key);
+                }
+            }
+            codeOffset += maskedLine.length + 1;
+        }
 
         for (let idx = 0; idx < maskedLines.length; idx++) {
             const line = maskedLines[idx];
             const raw = lines[idx];
+            const rawTrimmed = raw.trim();
             const trimmed = line.trim();
             if (!trimmed) continue;
             const compact = trimmed.replace(/\s+/g, ' ');
@@ -673,8 +864,8 @@ class JungleScanner {
             }
 
             if (/^\s*switch\s*\(/.test(compact)) {
-                const tail = maskedLines.slice(idx, Math.min(idx + 200, maskedLines.length)).join('\n');
-                if (!/\bdefault\s*:/.test(tail)) {
+                const info = switchInfo(idx);
+                if (!info.hasDefault) {
                     e(lineNum, "switch statement has no default case.", "Handle unexpected values with a default branch.", "JavaScript logic", "info");
                 }
             }
@@ -690,7 +881,7 @@ class JungleScanner {
                     e(lineNum, "Namespace declaration is missing its body.", "Add { ... } or remove the namespace keyword.", "TypeScript syntax", "error");
                 }
 
-                const typed = compact.match(/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*:\s*(number|string|boolean|bigint)\b[^=]*=\s*(.+?);?$/);
+                const typed = rawTrimmed.match(/\b(?:const|let|var)\s+[A-Za-z_$][\w$]*\s*:\s*(number|string|boolean|bigint)\b[^=]*=\s*(.+?);?$/);
                 if (typed) {
                     const declared = typed[1];
                     const value = typed[2].trim();
@@ -713,8 +904,10 @@ class JungleScanner {
 
         // const reassignment is a definite runtime error, including +=/++ variants.
         for (const declaration of constDeclarations) {
-            for (let idx = declaration.line; idx < maskedLines.length; idx++) {
-                const line = maskedLines[idx];
+            for (let idx = declaration.line - 1; idx < maskedLines.length; idx++) {
+                const line = idx === declaration.line - 1
+                    ? maskedLines[idx].slice(Math.max(0, maskedLines[idx].indexOf(declaration.name) + declaration.name.length))
+                    : maskedLines[idx];
                 const assignment = new RegExp("(^|[^.\\w$])" + declaration.name + "\\s*(?:=|\\+=|-=|\\*=|/=|%=|\\+\\+|--)");
                 if (assignment.test(line)) {
                     e(idx + 1, "Assignment to const '" + declaration.name + "'.", "Use let if the binding must change, or remove the reassignment.", "JavaScript runtime", "error");
@@ -805,6 +998,25 @@ class JungleScanner {
         const e = (ln, msg, hint, kind, sev = "error") => issues.push(this.makeIssue(ln, msg, hint, kind, null, sev));
         const bracketDepths = this.computeBracketDepths(lines);
         const nextNonBlank = (idx) => this.nextNonBlankTrimmed(lines, idx);
+        const hclResourceRanges = [];
+        if (lang === 'HCL') {
+            for (let start = 0; start < codeLines.length; start++) {
+                if (!/^\s*resource\s+"[^"]+"\s+"[^"]+"\s*\{/.test(codeLines[start])) continue;
+                const baseDepth = bracketDepths.start[start];
+                let end = start;
+                for (let cursor = start; cursor < codeLines.length; cursor++) {
+                    if (cursor > start && bracketDepths.end[cursor] <= baseDepth) { end = cursor; break; }
+                    end = cursor;
+                }
+                hclResourceRanges.push({ start, end });
+            }
+        }
+        const cMemory = (lang === 'C' || lang === 'C++') ? {
+            allocations: [...maskedFull.matchAll(/\bmalloc\s*\(/g)].map(match => match.index),
+            frees: (maskedFull.match(/\bfree\s*\(/g) || []).length,
+            news: lang === 'C++' ? [...maskedFull.matchAll(/\bnew\b/g)].length : 0,
+            deletes: lang === 'C++' ? (maskedFull.match(/\bdelete\b/g) || []).length : 0
+        } : null;
         // `line`/`trimmed` are string/comment-masked so keyword checks don't fire on text
         // inside strings or comments. `rawLine`/`rawTrimmed` keep the original text for the
         // few checks that must inspect the actual quotes or string contents.
@@ -815,13 +1027,13 @@ class JungleScanner {
             const trimmed = line.trim();
             // '//' is a line comment in most languages, but NOT in Nim (which uses '#'),
             // so for Nim we let '//'-lines fall through to be flagged below.
-            if (!trimmed || (trimmed.startsWith('//') && lang !== 'Nim') || trimmed.startsWith('#')) return;
+            if (!trimmed || (trimmed.startsWith('//') && lang !== 'Nim') || (trimmed.startsWith('#') && !(lang === 'C' || lang === 'C++') && !/^#\s*include\b/.test(trimmed))) return;
             // Skip bracket-sensitive checks if this line starts inside an open bracket
             // (continuation of a comprehension/condition) or itself opens brackets
             // that stay unclosed at line's end (multi-line def/if signature).
             const insideBrackets = bracketDepths.start[idx] > 0 || bracketDepths.end[idx] > 0;
             if (lang === 'Python') {
-                if (!insideBrackets && /^(if|elif|else|for|while|def|class|try|except|finally|with)\b/.test(trimmed) && !trimmed.endsWith(':') && !trimmed.endsWith('\\') && !trimmed.includes('#')) {
+                if (!insideBrackets && /^(?:async\s+def|if|elif|else|for|while|def|class|try|except|finally|with|match|case)\b/.test(trimmed) && !trimmed.endsWith(':') && !trimmed.endsWith('\\') && !trimmed.includes('#')) {
                     e(lineNum, "Python block statement is missing a trailing colon.", "Add ':' at the end of the line.", "Python syntax");
                 }
                 if (/^print\s+[^(\s]/.test(rawTrimmed)) {
@@ -979,7 +1191,8 @@ class JungleScanner {
                 if (/^\s*(def|elif)\b/.test(line)) {
                     e(lineNum, "This looks like Python syntax inside a JavaScript file.", "Switch to Python or rewrite using JavaScript syntax.", "Language mismatch");
                 }
-                if (/\bawait\b/.test(trimmed) && !/\basync\b/.test(fullCode.slice(0, fullCode.indexOf(trimmed)).slice(-600))) {
+                const moduleSyntax = /(^|\n)\s*(?:import\b|export\b)/m.test(maskedFull);
+                if (/\bawait\b/.test(trimmed) && !moduleSyntax && !/\basync\b/.test(fullCode.slice(0, rawLines.slice(0, idx).join('\n').length).slice(-600))) {
                     e(lineNum, "'await' used outside an async function.", "Mark the enclosing function with 'async'.", "JavaScript async", "warning");
                 }
                 // Loose equality == — strip strings/comments, use lookbehind to avoid matching === or !==
@@ -996,7 +1209,7 @@ class JungleScanner {
                 }
                 // typeof x == "undefined"
                 if (/\btypeof\s+\w[\w.]*\s*==\s*["']undefined["']/.test(rawTrimmed)) {
-                    e(lineNum, "typeof x == \"undefined\" is unnecessary.", "Use `x === undefined` for a cleaner check.", "JavaScript style", "info");
+                    e(lineNum, "typeof x == \"undefined\" is unnecessary.", "Use `typeof x === \"undefined\"` (or `typeof x !== \"undefined\"`) so an undeclared name remains safe to test.", "JavaScript style", "info");
                 }
                 // Empty catch block
                 if (/\bcatch\s*\(\s*\w+\s*\)\s*\{\s*\}/.test(trimmed)) {
@@ -1093,17 +1306,9 @@ class JungleScanner {
                 // NEW: duplicate case values (scan ahead)
                 if (/^switch\s*\(/.test(trimmed)) {
                     const caseValues = new Set();
-                    for (let j = idx + 1; j < Math.min(idx + 200, lines.length); j++) {
-                        const caseTrimmed = lines[j].trim();
-                        const caseMatch = caseTrimmed.match(/^case\s+(.+?)\s*:/);
-                        if (caseMatch) {
-                            const val = caseMatch[1];
-                            if (caseValues.has(val)) {
-                                e(j + 1, `Duplicate case value '${val}' in switch statement.`, "Each case value should be unique; duplicate cases are unreachable.", "JavaScript logic", "warning");
-                            }
-                            caseValues.add(val);
-                        }
-                        if (/^\}/.test(caseTrimmed)) break;
+                    for (const entry of switchInfo(idx).cases) {
+                        if (caseValues.has(entry.value)) e(entry.line, `Duplicate case value '${entry.value}' in switch statement.`, "Each case value should be unique; duplicate cases are unreachable.", "JavaScript logic", "warning");
+                        caseValues.add(entry.value);
                     }
                 }
                 // NEW: shadowed variables — only flag when the earlier declaration is in an
@@ -1143,7 +1348,7 @@ class JungleScanner {
                     e(lineNum, "Object.assign() mutates the first argument — this may be unintentional.", "Pass {} as the first argument to create a new object: Object.assign({}, source).", "JavaScript logic", "warning");
                 }
             } else if (lang === 'Java') {
-                if (/public\s+class\s+[A-Za-z_]\w*/.test(trimmed) && !/[{;]/.test(trimmed) && !/^(extends|implements)\b/.test(nextNonBlank(idx))) {
+                if (/public\s+class\s+[A-Za-z_]\w*/.test(trimmed) && !/[{;]/.test(trimmed) && !/^\s*\{/.test(nextNonBlank(idx)) && !/^(extends|implements)\b/.test(nextNonBlank(idx))) {
                     e(lineNum, "Java class declaration is missing an opening brace.", "Add '{' after the class name.", "Java syntax");
                 }
                 if (/System\.out\.print(?:ln)?\s+["']/.test(rawTrimmed)) {
@@ -1167,16 +1372,17 @@ class JungleScanner {
                 if (/\b(int|float|double|char|bool|long|short|void)\s+\w+\s*\([^)]*\)\s*$/.test(trimmed) && nextNonBlank(idx) !== '{') {
                     e(lineNum, "Function declaration or definition is missing ';' or '{'.", "Add ';' for a prototype or '{...}' for a function body.", "C/C++ syntax");
                 }
-                if (/\bscanf\s*\(\s*["'][^"']*["']\s*,\s*[^&]/.test(trimmed)) {
+                const scanfCall = rawTrimmed.match(/\b(?:f?scanf|sscanf)\s*\(\s*["']([^"']*)["']\s*,\s*([\s\S]*)\)\s*;?$/);
+                if (scanfCall && scanfCall[2].trim() && !/^&\s*[A-Za-z_]\w*/.test(scanfCall[2].trim())) {
                     e(lineNum, "scanf argument may be missing '&' address-of operator.", "Pass the address of the variable: scanf(\"%d\", &var).", "C/C++ syntax");
                 }
-                if (/\bmalloc\s*\(/.test(trimmed) && !/\bfree\s*\(/.test(maskedFull)) {
+                if (false && /\bmalloc\s*\(/.test(trimmed) && !/\bfree\s*\(/.test(maskedFull)) {
                     e(lineNum, "malloc() called but no matching free() found in the file.", "Always free() every malloc() allocation to prevent memory leaks.", "C/C++ memory", "warning");
                 }
-                if (lang === 'C++' && /\bgets\s*\(/.test(trimmed)) {
+                if ((lang === 'C' || lang === 'C++') && /\bgets\s*\(/.test(trimmed)) {
                     e(lineNum, "gets() is unsafe and removed in C11.", "Use fgets(buf, size, stdin) instead.", "C/C++ security", "warning");
                 }
-                if (lang === 'C++' && /\bnew\b/.test(trimmed) && !/\bdelete\b/.test(maskedFull)) {
+                if (false && lang === 'C++' && /\bnew\b/.test(trimmed) && !/\bdelete\b/.test(maskedFull)) {
                     e(lineNum, "'new' used but no 'delete' found — possible memory leak.", "Match every 'new' with a 'delete' or use smart pointers (unique_ptr).", "C++ memory", "warning");
                 }
             } else if (lang === 'Go') {
@@ -1242,7 +1448,18 @@ class JungleScanner {
             } else if (lang === 'Ruby') {
                 // Ruby 3+ "endless method" (def foo(x) = x * 2) needs no 'end' at all.
                 const isEndlessMethod = /^def\s+[\w.]+\s*(\([^)]*\))?\s*=\s*.+$/.test(trimmed);
-                if (/\bdef\s+\w+/.test(trimmed) && !isEndlessMethod && !lines.slice(idx, idx + 30).some(l => /^\s*end\b/.test(l))) {
+                let rubyMethodClosed = isEndlessMethod;
+                if (!rubyMethodClosed && /^\s*def\b/.test(trimmed)) {
+                    let depth = 0;
+                    for (let j = idx; j < lines.length; j++) {
+                        const rubyLine = codeLines[j].trim();
+                        if (/^(?:def|class|module|if|unless|case|while|until|for|begin)\b/.test(rubyLine)) depth++;
+                        if (/\bdo(?:\s*\|[^|]*\|)?\s*$/.test(rubyLine)) depth++;
+                        depth -= (rubyLine.match(/\bend\b/g) || []).length;
+                        if (depth <= 0) { rubyMethodClosed = true; break; }
+                    }
+                }
+                if (/\bdef\s+\w+/.test(trimmed) && !rubyMethodClosed) {
                     e(lineNum, "Ruby method defined with 'def' may be missing a closing 'end'.", "Add 'end' after the method body.", "Ruby syntax");
                 }
                 if (/\bputs\s*\(/.test(trimmed)) {
@@ -1300,10 +1517,10 @@ class JungleScanner {
                 if (/\bprint\s*\(/.test(trimmed)) {
                     e(lineNum, "print() is fine for debugging but should be removed in released builds.", "Remove or replace with push_warning() / push_error() for production.", "GDScript style", "info");
                 }
-                if (/\bsetget\b/.test(trimmed)) {
+                if (false && /\bsetget\b/.test(trimmed)) {
                     e(lineNum, "'setget' is Godot 3 syntax — use @export and property setter/getter in Godot 4.", "Replace setget with a Godot 4 property: var x: int: get: return _x", "GDScript version", "warning");
                 }
-                if (/\bonready\b/.test(trimmed)) {
+                if (false && /\bonready\b/.test(trimmed)) {
                     e(lineNum, "'onready' is Godot 3 syntax — use @onready in Godot 4.", "Replace 'onready var' with '@onready var'.", "GDScript version", "warning");
                 }
                 if (/^\s*var\s+\w+\s*=\s*(null|0|false|"")\s*$/.test(line)) {
@@ -1332,7 +1549,9 @@ class JungleScanner {
                     e(lineNum, "Solidity has no floating-point types.", "Use uint/int with fixed-point arithmetic or a library like PRBMath.", "Solidity syntax");
                 }
             } else if (lang === 'Nix') {
-                if (/\blet\b/.test(trimmed) && !lines.slice(idx, idx + 40).some(l => /^\s*in\b/.test(l))) {
+                const letPos = trimmed.search(/\blet\b/);
+                const letTail = letPos >= 0 ? trimmed.slice(letPos + 3) : '';
+                if (letPos >= 0 && !/\bin\b/.test(letTail) && !lines.slice(idx + 1, idx + 40).some(l => /\bin\b/.test(l))) {
                     e(lineNum, "'let' expression is missing a corresponding 'in'.", "Add 'in <expression>' after the let bindings.", "Nix syntax");
                 }
                 if (/^\s*with\s+\w/.test(line) && !trimmed.endsWith(';')) {
@@ -1357,8 +1576,9 @@ class JungleScanner {
                 if (/\$\{[^}]*\}/.test(trimmed) && /"\s*\+\s*"/.test(trimmed)) {
                     e(lineNum, "String concatenation with '+' is not valid in HCL — use template interpolation.", "Use \"${var.a}${var.b}\" instead of \"${var.a}\" + \"${var.b}\".", "HCL syntax");
                 }
-                if (/\bcount\s*=\s*\d/.test(trimmed) && /\bfor_each\b/.test(fullCode)) {
-                    e(lineNum, "Mixing 'count' and 'for_each' in the same configuration can cause index drift.", "Use one meta-argument consistently per resource.", "HCL style", "warning");
+                const resource = hclResourceRanges.find(range => idx >= range.start && idx <= range.end);
+                if (resource && /\bcount\s*=/.test(trimmed) && codeLines.slice(resource.start, resource.end + 1).some(item => /\bfor_each\s*=/.test(item))) {
+                    e(lineNum, "A resource cannot use both count and for_each.", "Choose one meta-argument for this resource; count and for_each are valid in separate resources.", "HCL style", "warning");
                 }
                 if (/\bhardcoded\b|password\s*=\s*"[^"]{3,}"|secret\s*=\s*"[^"]{3,}"/i.test(rawTrimmed)) {
                     e(lineNum, "Hardcoded secret or password detected in HCL.", "Use a variable or a secrets manager reference instead of a literal value.", "HCL security", "error");
@@ -1427,6 +1647,21 @@ class JungleScanner {
                 }
             }
         });
+        if (cMemory) {
+            const unmatchedMalloc = Math.max(0, cMemory.allocations.length - cMemory.frees);
+            const mallocOffsets = cMemory.allocations.slice(cMemory.frees);
+            for (const offset of mallocOffsets.slice(0, unmatchedMalloc)) {
+                const line = fullCode.slice(0, offset).split('\n').length;
+                issues.push(this.makeIssue(line, "malloc() allocation may not have a matching free().", "Track each allocation and free it exactly once, or use an ownership-aware helper.", "C/C++ memory", null, "warning"));
+            }
+            if (lang === 'C++') {
+                const unmatchedNew = Math.max(0, cMemory.news - cMemory.deletes);
+                if (unmatchedNew) {
+                    const line = lines.findIndex(item => /\bnew\b/.test(item)) + 1;
+                    issues.push(this.makeIssue(line > 0 ? line : 1, "A new allocation may not have a matching delete.", "Match each new with delete, or prefer std::unique_ptr/std::shared_ptr.", "C++ memory", null, "warning"));
+                }
+            }
+        }
         return issues;
     }
     // Universal checks that apply to all languages
@@ -1436,9 +1671,18 @@ class JungleScanner {
         const hasTabs = lines.some(l => /^\t/.test(l));
         const hasSpaces = lines.some(l => /^ /.test(l));
         let mixedTabsReported = false;
-        const commentRe = lang === 'Python' || lang === 'Ruby' || lang === 'Bash'
-            ? /#+\s*(TODO|FIXME|HACK|XXX)\b/i
-            : /(?:\/\/|\/\*|#)\s*(TODO|FIXME|HACK|XXX)\b/i;
+        const commentRe = ({
+            Python: /#+\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Ruby: /#+\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Bash: /#+\s*(TODO|FIXME|HACK|XXX)\b/i,
+            SQL: /(?:--|\/\*)\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Haskell: /(?:--|\{-)\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Lua: /--\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Erlang: /%\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Lisp: /;\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Clojure: /;\s*(TODO|FIXME|HACK|XXX)\b/i,
+            Fortran: /!\s*(TODO|FIXME|HACK|XXX)\b/i
+        }[lang] || /(?:\/\/|\/\*|#)\s*(TODO|FIXME|HACK|XXX)\b/i);
         lines.forEach((line, idx) => {
             const lineNum = idx + 1;
             // Lines over 120 characters
@@ -1472,10 +1716,20 @@ class JungleScanner {
         const e = (ln, msg, hint, kind, col, sev) => issues.push(this.makeIssue(ln, msg, hint, kind, col ?? null, sev ?? "info"));
         const fullCode = lines.join('\n');
         // Detect files with no actual code (only whitespace/comments)
-        const commentPatterns = lang === 'Python' || lang === 'Ruby' || lang === 'Bash'
-            ? /^\s*(#.*)?$/
-            : /^\s*(\/\/.*|\/\*.*\*\/\s*|#.*)?$/;
-        const hasCode = lines.some(l => l.trim() && !commentPatterns.test(l));
+        const commentPatterns = {
+            Python: /^\s*(#.*)?$/,
+            Ruby: /^\s*(#.*)?$/,
+            Bash: /^\s*(#.*)?$/,
+            SQL: /^\s*(--.*|\/\*.*\*\/\s*)?$/,
+            Haskell: /^\s*(--.*|\{-[\s\S]*-\}\s*)?$/,
+            Lua: /^\s*(--.*)?$/,
+            Erlang: /^\s*(%.*)?$/,
+            Lisp: /^\s*(;.*)?$/,
+            Clojure: /^\s*(;.*)?$/,
+            Fortran: /^\s*(!.*|[cC]\s.*)?$/
+        }[lang] || /^\s*(\/\/.*|\/\*.*\*\/\s*|#.*)?$/;
+        const maskedForCodeCheck = this.maskCode(lang, lines);
+        const hasCode = maskedForCodeCheck.some(l => l.trim());
         if (!hasCode && lines.length > 0) {
             e(1, "File contains no executable code — only whitespace or comments.", "Add code or remove the file if it is no longer needed.", "Code quality", null, "info");
         }
@@ -1493,7 +1747,8 @@ class JungleScanner {
             for (let i = 0; i < lines.length; i++) {
                 const t = lines[i].trim();
                 // Detect function/method opening — a line containing 'function', '=>', or known patterns with '{'
-                const isFnOpen = /\b(function\s+\w+|function\s*\(|\w+\s*\([^)]*\)\s*\{|=>\s*\{)/.test(t);
+                const isControl = /^(?:if|for|while|switch|catch|with)\b/.test(t);
+                const isFnOpen = !isControl && /\b(function\s+\w+|function\s*\(|\w+\s*\([^)]*\)\s*\{|=>\s*\{)/.test(t);
                 for (let ci = 0; ci < lines[i].length; ci++) {
                     const ch = lines[i][ci];
                     if (ch === '{') {
@@ -1570,7 +1825,7 @@ class JungleScanner {
         if (lang === 'C' || lang === 'C++') {
             maskedLines.forEach((raw, index) => {
                 if (/\b(?:strcpy|strcat|sprintf)\s*\(/.test(raw)) e(index + 1, "Unbounded C string function can overflow its destination.", "Use a bounded alternative such as snprintf or a size-aware string API.", lang + ' security', 'warning');
-                if (/\bscanf\s*\([^\n]*%s(?!\d)/.test(raw)) e(index + 1, "scanf %s has no width limit and can overflow the buffer.", "Add a maximum field width or use fgets with explicit validation.", 'C input safety', 'warning');
+                if (/\bscanf\s*\([^\n]*%s(?!\d)/.test(lines[index])) e(index + 1, "scanf %s has no width limit and can overflow the buffer.", "Add a maximum field width or use fgets with explicit validation.", 'C input safety', 'warning');
             });
         }
         if (lang === 'Bash') {
