@@ -81,6 +81,7 @@
         connect.setAttribute('aria-hidden', 'true');
         status.textContent = connected ? 'API key connected' : 'Connect API key';
         status.setAttribute('aria-label', connected ? 'Change API key' : 'Connect API key');
+        status.setAttribute('aria-expanded', 'false');
         model.disabled = !connected;
         if (!connected) resetDetectedModels();
     };
@@ -230,10 +231,11 @@
     };
     document.getElementById('agent-close').onclick = () => { panel.classList.remove('open'); toggle.classList.remove('active'); };
     status.onclick = () => {
-        const open = connect.classList.contains('hidden');
-        connect.classList.toggle('hidden', open);
-        connect.setAttribute('aria-hidden', String(open));
-        if (!open) setTimeout(() => keyInput.focus(), 30);
+        const shouldOpen = connect.classList.contains('hidden');
+        connect.classList.toggle('hidden', !shouldOpen);
+        connect.setAttribute('aria-hidden', String(!shouldOpen));
+        status.setAttribute('aria-expanded', String(shouldOpen));
+        if (shouldOpen) setTimeout(() => keyInput.focus(), 30);
     };
     document.getElementById('agent-expand').onclick = event => {
         panel.classList.toggle('expanded');
