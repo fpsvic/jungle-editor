@@ -23,14 +23,15 @@
                 <button id="agent-close" title="Close" aria-label="Close agent panel">×</button>
             </div>
             <div class="agent-connect hidden" id="agent-connect" aria-hidden="true">
-                <p>Enter an API key for the selected model. The key stays in this browser tab.</p>
+                <p>Enter an API key. Jungle Editor detects supported providers and loads their available models. The key stays in this browser tab.</p>
                 <input id="agent-api-key" type="password" placeholder="enter a API key" autocomplete="off">
+                <input id="agent-api-endpoint" class="agent-endpoint" type="url" placeholder="API endpoint for unknown providers (optional)" autocomplete="off">
                 <button id="agent-connect-btn" type="button">Connect</button>
             </div>
             <div class="agent-messages" id="agent-messages"><div class="agent-empty">Ask the agent to explain code, fix a bug, or create and edit project files.</div></div>
             <div class="agent-composer">
                 <textarea id="agent-input" placeholder="Ask the coding agent to work with your code…"></textarea>
-                <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="gemini-2.5-flash">Gemini 2.5 Flash · API key</option><option value="openai:gpt-4o-mini">OpenAI GPT-4o mini · API key</option></select>
+                <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="" selected>Connect a key to detect models</option></select>
                 <button class="agent-send" id="agent-send" type="button">Send</button>
             </div>
         </aside>`);
@@ -43,6 +44,7 @@
     const status = document.getElementById('agent-status');
     const connect = document.getElementById('agent-connect');
     const keyInput = document.getElementById('agent-api-key');
+    const endpointInput = document.getElementById('agent-api-endpoint');
 
     function normalizeApiKey(value) {
         return String(value || '').trim()
@@ -52,7 +54,13 @@
             .trim();
     }
 
+    function normalizeApiEndpoint(value) {
+        return String(value || '').trim().replace(/\/+$/, '').replace(/\/(?:models|chat\/completions)$/i, '');
+    }
+
     let apiKey = normalizeApiKey(sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '');
+    let apiEndpoint = normalizeApiEndpoint(sessionStorage.getItem('jungle_agent_api_endpoint') || '');
+    endpointInput.value = apiEndpoint;
     let busy = false;
     const conversation = [];
 
@@ -63,16 +71,35 @@
         status.textContent = connected ? 'API key connected' : 'Connect API key';
         status.setAttribute('aria-label', connected ? 'Change API key' : 'Connect API key');
     };
+    // Providers are identified from their documented key prefixes where one
+    // exists. A key itself cannot identify an arbitrary provider, so unknown
+    // keys are kept intact and never sent to a guessed service.
+    const PROVIDERS = {
+        Gemini: { kind: 'gemini', keyPattern: /^AIza/i, modelPrefix: '', defaultModel: 'gemini-2.5-flash', defaultLabel: 'Gemini 2.5 Flash', modelsUrl: 'https://generativelanguage.googleapis.com/v1beta/models' },
+        OpenAI: { kind: 'openai', keyPattern: /^sk-(?!or-v1-|ant-)/i, modelPrefix: 'openai:', defaultModel: 'openai:gpt-4o-mini', defaultLabel: 'GPT-4o mini', modelsUrl: 'https://api.openai.com/v1/models', chatUrl: 'https://api.openai.com/v1/chat/completions' },
+        OpenRouter: { kind: 'openai', keyPattern: /^sk-or-v1-/i, modelPrefix: 'openrouter:', defaultModel: 'openrouter:google/gemini-2.5-flash', defaultLabel: 'Google Gemini 2.5 Flash', modelsUrl: 'https://openrouter.ai/api/v1/models', chatUrl: 'https://openrouter.ai/api/v1/chat/completions' },
+        Anthropic: { kind: 'anthropic', keyPattern: /^sk-ant-/i, modelPrefix: 'anthropic:', defaultModel: 'anthropic:claude-3-5-haiku-latest', defaultLabel: 'Claude 3.5 Haiku', modelsUrl: 'https://api.anthropic.com/v1/models', chatUrl: 'https://api.anthropic.com/v1/messages' },
+        Groq: { kind: 'openai', keyPattern: /^gsk_/i, modelPrefix: 'groq:', defaultModel: 'groq:llama-3.3-70b-versatile', defaultLabel: 'Llama 3.3 70B', modelsUrl: 'https://api.groq.com/openai/v1/models', chatUrl: 'https://api.groq.com/openai/v1/chat/completions' }
+    };
+
     function providerForKey(value) {
-        if (/^AIza/i.test(value)) return 'Gemini';
-        if (/^sk-(?!or-v1-)/i.test(value)) return 'OpenAI';
-        return '';
+        const key = normalizeApiKey(value);
+        return Object.keys(PROVIDERS).find(name => PROVIDERS[name].keyPattern.test(key)) || '';
     }
 
     function providerForModel(value) {
-        if (String(value || '').startsWith('openai:')) return 'OpenAI';
-        if (String(value || '').startsWith('openrouter:')) return 'OpenRouter';
+        const modelValue = String(value || '');
+        const match = Object.entries(PROVIDERS).find(([, config]) => config.modelPrefix && modelValue.startsWith(config.modelPrefix));
+        if (match) return match[0];
+        if (modelValue.startsWith('custom:')) return 'Custom';
         return 'Gemini';
+    }
+
+    function configForProvider(provider) {
+        if (provider === 'Custom') {
+            return { kind: 'openai', modelPrefix: 'custom:', defaultModel: 'custom:auto', defaultLabel: 'Auto-detected model', modelsUrl: `${apiEndpoint}/models`, chatUrl: `${apiEndpoint}/chat/completions` };
+        }
+        return PROVIDERS[provider];
     }
 
     const storedModel = sessionStorage.getItem('jungle_agent_model');
@@ -95,12 +122,10 @@
     }
 
     function ensureProviderModel(provider) {
-        const defaults = {
-            Gemini: { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
-            OpenAI: { value: 'openai:gpt-4o-mini', label: 'GPT-4o mini' }
-        };
-        const entry = defaults[provider];
+        const config = configForProvider(provider);
+        const entry = config && { value: config.defaultModel, label: config.defaultLabel };
         if (!entry) return false;
+        model.querySelector('option[value=""]')?.remove();
         if (![...model.options].some(option => option.value === entry.value)) {
             const option = document.createElement('option');
             option.value = entry.value;
@@ -112,6 +137,7 @@
     }
 
     function addDiscoveredModels(provider, entries) {
+        model.querySelector('option[value=""]')?.remove();
         model.querySelectorAll('option[data-agent-discovered="true"]').forEach(option => option.remove());
         const values = new Set([...model.options].map(option => option.value));
         entries.forEach(entry => {
@@ -131,12 +157,13 @@
     }
 
     async function discoverModelsForKey(key, announce = true) {
-        const provider = providerForKey(key);
+        const provider = providerForKey(key) || (apiEndpoint ? 'Custom' : '');
         if (!provider) {
             status.textContent = 'API key connected';
-            if (announce) addMessage('system', 'API key saved. Choose the matching model from the list.');
+            if (announce) addMessage('system', 'API key saved, but its provider cannot be identified automatically. Select a compatible model or provide its API endpoint.');
             return;
         }
+        const config = configForProvider(provider);
         // Select a provider-compatible fallback before discovery. If a browser
         // blocks the provider's model-list request, the first chat still uses
         // the right API instead of sending an OpenAI key to Gemini (or vice versa).
@@ -147,9 +174,12 @@
         try {
             const controller = new AbortController();
             timeout = setTimeout(() => controller.abort(), 8000);
-            const response = provider === 'Gemini'
-                ? await fetch('https://generativelanguage.googleapis.com/v1beta/models', { headers: { 'x-goog-api-key': key }, signal: controller.signal })
-                : await fetch('https://api.openai.com/v1/models', { headers: { Authorization: `Bearer ${key}` }, signal: controller.signal });
+            const headers = config.kind === 'gemini'
+                ? { 'x-goog-api-key': key }
+                : config.kind === 'anthropic'
+                    ? { 'x-api-key': key, 'anthropic-version': '2023-06-01' }
+                    : { Authorization: `Bearer ${key}` };
+            const response = await fetch(config.modelsUrl, { headers, signal: controller.signal });
             clearTimeout(timeout);
             const data = await response.json().catch(() => ({}));
             const message = data.error?.message || `Model discovery failed (${response.status})`;
@@ -158,9 +188,12 @@
                 error.auth = response.status === 401 || response.status === 403 || /api key|invalid.*key|unauthenticated/i.test(message);
                 throw error;
             }
-            const entries = provider === 'Gemini'
+            const entries = config.kind === 'gemini'
                 ? (data.models || []).filter(item => (item.supportedGenerationMethods || []).includes('generateContent')).map(item => ({ value: String(item.name || '').replace(/^models\//, ''), label: item.displayName || item.name }))
-                : (data.data || []).filter(item => /^(gpt-|o[1-9]|chatgpt-)/i.test(item.id || '')).map(item => ({ value: `openai:${item.id}`, label: item.id }));
+                : (data.data || []).filter(item => {
+                    const id = String(item.id || '');
+                    return id && !/(embedding|moderation|whisper|tts|dall-e|image|rerank)/i.test(id);
+                }).map(item => ({ value: `${config.modelPrefix}${item.id}`, label: item.display_name || item.displayName || item.id }));
             const count = addDiscoveredModels(provider, entries);
             status.textContent = 'API key connected';
             if (announce) addMessage('system', count ? `Added ${count} ${provider} model${count === 1 ? '' : 's'} to the list.` : `The ${provider} key is valid, but no chat models were returned.`);
@@ -168,11 +201,7 @@
             if (timeout) clearTimeout(timeout);
             status.textContent = 'API key connected';
             if (error.auth) {
-                apiKey = '';
-                sessionStorage.removeItem('jungle_agent_api_key');
-                sessionStorage.removeItem('jungle_gemini_api_key');
-                setConnected(false);
-                addMessage('system', `${provider} rejected this API key: ${error.message}`);
+                addMessage('system', `${provider} did not accept this key: ${error.message} The key was kept so you can choose another model or endpoint.`);
             } else if (announce) {
                 addMessage('system', `Could not load ${provider} models: ${error.name === 'AbortError' ? 'request timed out' : error.message}`);
             }
@@ -202,9 +231,12 @@
         const value = normalizeApiKey(keyInput.value);
         if (!value) return;
         apiKey = value;
+        apiEndpoint = normalizeApiEndpoint(endpointInput.value);
         modelManuallySelected = false;
         sessionStorage.setItem('jungle_agent_api_key', apiKey);
         sessionStorage.removeItem('jungle_gemini_api_key');
+        if (apiEndpoint) sessionStorage.setItem('jungle_agent_api_endpoint', apiEndpoint);
+        else sessionStorage.removeItem('jungle_agent_api_endpoint');
         keyInput.value = '';
         setConnected(true);
         addMessage('system', 'API key saved. Checking available models…');
@@ -410,11 +442,17 @@
         return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, key === 'type' && typeof item === 'string' ? item.toLowerCase() : openAiSchema(item)]));
     }
 
-    async function callOpenAI(contents) {
-        const modelName = model.value.slice('openai:'.length) || 'gpt-4o-mini';
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    async function callOpenAICompatible(contents, provider) {
+        const config = configForProvider(provider) || PROVIDERS.OpenAI;
+        const modelName = model.value.startsWith(config.modelPrefix) ? model.value.slice(config.modelPrefix.length) : config.defaultModel.slice(config.modelPrefix.length);
+        const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` };
+        if (provider === 'OpenRouter') {
+            headers['HTTP-Referer'] = window.location.origin;
+            headers['X-Title'] = 'Jungle Editor';
+        }
+        const response = await fetch(config.chatUrl, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+            headers,
             body: JSON.stringify({
                 model: modelName,
                 messages: openAiMessages(contents),
@@ -427,7 +465,7 @@
         });
         const data = await response.json();
         if (!response.ok) {
-            const error = new Error(data.error?.message || `OpenAI request failed (${response.status})`);
+            const error = new Error(data.error?.message || `${provider} request failed (${response.status})`);
             error.auth = response.status === 401 || response.status === 403;
             throw error;
         }
@@ -443,8 +481,61 @@
         return { role: 'model', parts };
     }
 
+    function anthropicMessages(contents) {
+        return contents.map(item => {
+            const parts = item.parts || [];
+            const responses = parts.filter(part => part.functionResponse).map(part => part.functionResponse);
+            if (responses.length) return {
+                role: 'user',
+                content: responses.map(response => ({ type: 'tool_result', tool_use_id: response.id || response.name, content: JSON.stringify(response.response || {}) }))
+            };
+            if (item.role === 'model') {
+                const content = [];
+                const text = parts.filter(part => part.text).map(part => part.text).join('\n');
+                if (text) content.push({ type: 'text', text });
+                parts.filter(part => part.functionCall).forEach(part => content.push({ type: 'tool_use', id: part.functionCall.id || part.functionCall.name, name: part.functionCall.name, input: part.functionCall.args || {} }));
+                return { role: 'assistant', content: content.length ? content : [{ type: 'text', text: '' }] };
+            }
+            const text = parts.filter(part => part.text).map(part => part.text).join('\n');
+            return text ? { role: 'user', content: text } : null;
+        }).filter(Boolean);
+    }
+
+    async function callAnthropic(contents) {
+        const config = PROVIDERS.Anthropic;
+        const modelName = model.value.startsWith(config.modelPrefix) ? model.value.slice(config.modelPrefix.length) : config.defaultModel.slice(config.modelPrefix.length);
+        const response = await fetch(config.chatUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+            body: JSON.stringify({
+                model: modelName,
+                max_tokens: 4096,
+                system: 'You are Jungle Agent, a concise coding assistant inside a browser IDE. Use the provided project snapshot and tools. You may create, edit, and delete files or folders when asked. Use workspace_status before UI actions, then use click_workspace_control for safe editor controls. Use run_terminal when execution or inspection is useful; it runs immediately in the active in-browser workspace. Never claim a tool succeeded until its response confirms success. Prefer focused changes and explain the result briefly.',
+                messages: anthropicMessages(contents),
+                tools: tools[0].functionDeclarations.map(declaration => ({ name: declaration.name, description: declaration.description, input_schema: openAiSchema(declaration.parameters) }))
+            })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            const error = new Error(data.error?.message || `Anthropic request failed (${response.status})`);
+            error.auth = response.status === 401 || response.status === 403 || /api key|authentication|unauthor/i.test(error.message);
+            throw error;
+        }
+        const parts = [];
+        (data.content || []).forEach(item => {
+            if (item.type === 'text' && item.text) parts.push({ text: item.text });
+            if (item.type === 'tool_use') parts.push({ functionCall: { id: item.id, name: item.name, args: item.input || {} } });
+        });
+        if (!parts.length) throw new Error('Anthropic returned no response.');
+        return { role: 'model', parts };
+    }
+
     async function callModel(contents) {
-        return model.value.startsWith('openai:') ? callOpenAI(contents) : callGemini(contents);
+        const provider = providerForModel(model.value);
+        const config = configForProvider(provider);
+        if (config?.kind === 'openai') return callOpenAICompatible(contents, provider);
+        if (config?.kind === 'anthropic') return callAnthropic(contents);
+        return callGemini(contents);
     }
 
     async function callGemini(contents) {
@@ -473,6 +564,10 @@
             connect.classList.remove('hidden');
             connect.setAttribute('aria-hidden', 'false');
             keyInput.focus();
+            return;
+        }
+        if (!providerForKey(apiKey) && !apiEndpoint && !modelManuallySelected) {
+            addMessage('system', 'This API key provider is not identifiable from the key alone. Enter its OpenAI-compatible API endpoint or select a compatible model before chatting.');
             return;
         }
         busy = true; input.value = ''; input.disabled = send.disabled = true; status.textContent = 'Working';
@@ -504,7 +599,6 @@
             addMessage('model', finalText);
             conversation.push({ role: 'user', text: prompt }, { role: 'model', text: finalText });
         } catch (error) {
-            if (error.auth) { apiKey = ''; sessionStorage.removeItem('jungle_agent_api_key'); sessionStorage.removeItem('jungle_gemini_api_key'); setConnected(false); }
             addMessage('system', 'Agent error: ' + error.message);
         } finally {
             busy = false; input.disabled = send.disabled = false; setConnected(Boolean(apiKey)); input.focus();

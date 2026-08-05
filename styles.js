@@ -48,6 +48,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .agent-connect.hidden { display:none; }
 .agent-connect p { grid-column:1/-1; margin:0 0 3px; color:#8ea098; font-size:.75rem; line-height:1.4; }
 .agent-connect input { min-width:0; border:1px solid #354a41; background:#080c0a; color:#e8f2ee; border-radius:7px; padding:9px; font:12px Fira Code,monospace; outline:none; }
+.agent-connect .agent-endpoint { grid-column:1/-1; }
 .agent-connect button,.agent-send { border:1px solid #4e7564; background:#274639; color:#fff; border-radius:7px; padding:0 13px; cursor:pointer; font-weight:700; }
 .agent-messages { flex:1; min-height:0; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
 .agent-empty { margin:auto; max-width:270px; color:#65786f; text-align:center; font-size:.82rem; line-height:1.55; }
