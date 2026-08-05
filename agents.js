@@ -64,12 +64,25 @@
     let busy = false;
     const conversation = [];
 
+    function resetDetectedModels() {
+        model.querySelectorAll('option[data-agent-discovered="true"], option[data-agent-default="true"]').forEach(option => option.remove());
+        if (![...model.options].some(option => option.value === '')) {
+            const option = document.createElement('option');
+            option.value = '';
+            option.textContent = 'Connect a key to detect models';
+            model.appendChild(option);
+        }
+        model.value = '';
+    }
+
     const setConnected = connected => {
         // Keep the key field collapsed until the user explicitly opens it.
         connect.classList.add('hidden');
         connect.setAttribute('aria-hidden', 'true');
         status.textContent = connected ? 'API key connected' : 'Connect API key';
         status.setAttribute('aria-label', connected ? 'Change API key' : 'Connect API key');
+        model.disabled = !connected;
+        if (!connected) resetDetectedModels();
     };
     // Providers are identified from their documented key prefixes where one
     // exists. A key itself cannot identify an arbitrary provider, so unknown
