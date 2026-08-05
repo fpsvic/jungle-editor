@@ -43,7 +43,16 @@
     const status = document.getElementById('agent-status');
     const connect = document.getElementById('agent-connect');
     const keyInput = document.getElementById('agent-api-key');
-    let apiKey = sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '';
+
+    function normalizeApiKey(value) {
+        return String(value || '').trim()
+            .replace(/^['"]|['"]$/g, '')
+            .replace(/^Bearer\s+/i, '')
+            .replace(/^(?:api[_ -]?key|gemini[_ -]?api[_ -]?key)\s*[:=]\s*/i, '')
+            .trim();
+    }
+
+    let apiKey = normalizeApiKey(sessionStorage.getItem('jungle_agent_api_key') || sessionStorage.getItem('jungle_gemini_api_key') || '');
     let busy = false;
     const conversation = [];
 
@@ -85,6 +94,23 @@
         }
     }
 
+    function ensureProviderModel(provider) {
+        const defaults = {
+            Gemini: { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
+            OpenAI: { value: 'openai:gpt-4o-mini', label: 'GPT-4o mini' }
+        };
+        const entry = defaults[provider];
+        if (!entry) return false;
+        if (![...model.options].some(option => option.value === entry.value)) {
+            const option = document.createElement('option');
+            option.value = entry.value;
+            option.textContent = `${entry.label} · ${provider} API key`;
+            option.dataset.agentDefault = 'true';
+            model.appendChild(option);
+        }
+        return true;
+    }
+
     function addDiscoveredModels(provider, entries) {
         model.querySelectorAll('option[data-agent-discovered="true"]').forEach(option => option.remove());
         const values = new Set([...model.options].map(option => option.value));
@@ -114,6 +140,7 @@
         // Select a provider-compatible fallback before discovery. If a browser
         // blocks the provider's model-list request, the first chat still uses
         // the right API instead of sending an OpenAI key to Gemini (or vice versa).
+        ensureProviderModel(provider);
         selectDefaultModel(provider);
         status.textContent = 'Loading models…';
         let timeout;
@@ -172,7 +199,7 @@
         event.currentTarget.title = panel.classList.contains('expanded') ? 'Restore panel height' : 'Extend upward';
     };
     document.getElementById('agent-connect-btn').onclick = async () => {
-        const value = keyInput.value.trim();
+        const value = normalizeApiKey(keyInput.value);
         if (!value) return;
         apiKey = value;
         modelManuallySelected = false;
