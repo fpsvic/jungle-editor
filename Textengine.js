@@ -19,6 +19,12 @@ class JungleTextEngine {
         this.lastInputAt = 0;
         this.suggestions = [];
         this.suggestIndex = 0;
+        this.modelVersion = 0;
+        this.modelListeners = new Set();
+        this.model = { value: String(textarea.value || ''), lineStarts: [0], versionId: 0 };
+        this.lexicalCache = { versionId: -1, mask: null };
+        this.suggestTimer = 0;
+        this.rebuildLineIndex();
 
         this.record({ force: true });
         textarea.addEventListener('compositionstart', () => { this.composing = true; });
@@ -28,8 +34,10 @@ class JungleTextEngine {
             this.refreshStatus();
         });
         textarea.addEventListener('input', () => {
+            const changed = this.syncModel();
             if (!this.composing && !this.suppressRecord) this.record({ coalesce: true });
             this.hideSuggestions();
+            if (changed) this.scheduleSuggestions();
             this.refreshStatus();
         });
         ['click', 'keyup', 'select', 'scroll'].forEach(type => textarea.addEventListener(type, () => this.refreshStatus()));
@@ -44,6 +52,60 @@ class JungleTextEngine {
         return { value: this.el.value, start: this.el.selectionStart, end: this.el.selectionEnd, time: Date.now() };
     }
 
+    /**
+     * A small Monaco-like model API.  The textarea is still the browser input
+     * surface, but callers can now work with a versioned document model rather
+     * than reaching into the DOM for every operation.
+     */
+    getValue() { return this.model.value; }
+
+    getVersionId() { return this.model.versionId; }
+
+    getLineCount() { return this.model.lineStarts.length; }
+
+    getLineContent(line) {
+        const safeLine = Math.max(1, Math.min(this.getLineCount(), Number(line) || 1));
+        const start = this.offsetAt(safeLine, 1);
+        const next = safeLine < this.getLineCount() ? this.model.lineStarts[safeLine] : this.model.value.length;
+        return this.model.value.slice(start, next).replace(/\r?\n$/, '');
+    }
+
+    onDidChangeModelContent(listener) {
+        if (typeof listener !== 'function') return { dispose() {} };
+        this.modelListeners.add(listener);
+        return { dispose: () => this.modelListeners.delete(listener) };
+    }
+
+    rebuildLineIndex() {
+        const value = this.model?.value ?? String(this.el?.value || '');
+        const starts = [0];
+        for (let index = value.indexOf('\n'); index >= 0; index = value.indexOf('\n', index + 1)) starts.push(index + 1);
+        if (this.model) this.model.lineStarts = starts;
+        return starts;
+    }
+
+    syncModel({ force = false, changes = null, source = 'user' } = {}) {
+        const value = String(this.el.value ?? '');
+        const changed = force || value !== this.model.value;
+        if (!changed) return false;
+        this.model.value = value;
+        this.model.versionId = ++this.modelVersion;
+        this.rebuildLineIndex();
+        this.lexicalCache = { versionId: -1, mask: null };
+        const detail = {
+            changes,
+            source,
+            value,
+            versionId: this.model.versionId,
+            selections: this.getSelections(),
+        };
+        this.modelListeners.forEach(listener => {
+            try { listener(detail); } catch (_) {}
+        });
+        this.el.dispatchEvent(new CustomEvent('jungle-model-change', { bubbles: true, detail }));
+        return true;
+    }
+
     setDocument(value = '', start = 0, end = start, { emitInput = false } = {}) {
         const numericStart = Number(start);
         const numericEnd = Number(end);
@@ -54,6 +116,7 @@ class JungleTextEngine {
         this.el.selectionStart = Math.max(0, Math.min(safeStart, this.el.value.length));
         this.el.selectionEnd = Math.max(this.el.selectionStart, Math.min(safeEnd, this.el.value.length));
         this.suppressRecord = false;
+        this.syncModel({ force: true, source: 'setDocument' });
         this.history = [];
         this.future = [];
         this.breakUndoGroup = true;
@@ -68,6 +131,7 @@ class JungleTextEngine {
 
     record({ coalesce = false, force = false } = {}) {
         if (this.suppressRecord) return;
+        this.syncModel();
         const state = this.state();
         const last = this.history[this.history.length - 1];
         if (!force && last && last.value === state.value) return;
@@ -91,6 +155,7 @@ class JungleTextEngine {
         this.el.selectionStart = Math.min(state.start, this.el.value.length);
         this.el.selectionEnd = Math.min(state.end, this.el.value.length);
         this.suppressRecord = false;
+        this.syncModel({ force: true, source: 'undoRedo' });
         this.dispatchInput();
         this.breakUndoGroup = true;
         this.refreshStatus();
@@ -100,18 +165,63 @@ class JungleTextEngine {
         this.el.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    change(start, end, text, selectionStart = start + text.length, selectionEnd = selectionStart) {
-        const from = Math.max(0, Math.min(start, this.el.value.length));
-        const to = Math.max(from, Math.min(end, this.el.value.length));
+    /** Apply one or more non-overlapping edits as a single undoable transaction. */
+    applyEdits(edits = [], { selectionStart, selectionEnd, source = 'command' } = {}) {
+        this.syncModel();
+        const value = this.model.value;
+        const normalized = edits.map(edit => {
+            const start = Math.max(0, Math.min(Number(edit.start) || 0, value.length));
+            const end = Math.max(start, Math.min(Number(edit.end ?? start) || 0, value.length));
+            return { start, end, text: String(edit.text ?? '') };
+        }).filter(edit => edit.start <= edit.end).sort((a, b) => b.start - a.start || b.end - a.end);
+        if (!normalized.length) return false;
+        for (let index = 1; index < normalized.length; index++) {
+            if (normalized[index - 1].start < normalized[index].end) return false;
+        }
+        let next = value;
+        normalized.forEach(edit => { next = next.slice(0, edit.start) + edit.text + next.slice(edit.end); });
+        const primary = normalized[0];
+        const fallbackStart = primary.start + primary.text.length;
+        const nextStart = Number.isFinite(selectionStart) ? selectionStart : fallbackStart;
+        const nextEnd = Number.isFinite(selectionEnd) ? selectionEnd : nextStart;
         this.suppressRecord = true;
-        this.el.setRangeText(String(text), from, to, 'preserve');
-        this.el.selectionStart = Math.max(0, Math.min(selectionStart, this.el.value.length));
-        this.el.selectionEnd = Math.max(this.el.selectionStart, Math.min(selectionEnd, this.el.value.length));
+        this.el.value = next;
+        this.el.selectionStart = Math.max(0, Math.min(nextStart, next.length));
+        this.el.selectionEnd = Math.max(this.el.selectionStart, Math.min(nextEnd, next.length));
         this.suppressRecord = false;
+        this.syncModel({ changes: normalized.slice().reverse(), source });
         this.dispatchInput();
         this.record({ coalesce: false });
         this.breakUndoGroup = true;
         this.refreshStatus();
+        return true;
+    }
+
+    executeEdits(source, edits, options = {}) {
+        return this.applyEdits(edits, { ...options, source: source || 'command' });
+    }
+
+    change(start, end, text, selectionStart = start + String(text ?? '').length, selectionEnd = selectionStart) {
+        return this.applyEdits([{ start, end, text }], { selectionStart, selectionEnd, source: 'change' });
+    }
+
+    getSelections() {
+        return [{ start: this.el.selectionStart || 0, end: this.el.selectionEnd || 0 }];
+    }
+
+    setSelection(start, end = start, { reveal = true } = {}) {
+        const safeStart = Math.max(0, Math.min(Number(start) || 0, this.model.value.length));
+        const safeEnd = Math.max(safeStart, Math.min(Number(end) || 0, this.model.value.length));
+        this.el.focus();
+        this.el.selectionStart = safeStart;
+        this.el.selectionEnd = safeEnd;
+        if (reveal) this.revealLine(this.lineNumberAt(safeStart));
+        this.refreshStatus();
+    }
+
+    revealLine(line) {
+        const safeLine = Math.max(1, Number(line) || 1);
+        this.el.scrollTop = Math.max(0, (safeLine - 3) * 22);
     }
 
     lineRange() {
@@ -123,21 +233,31 @@ class JungleTextEngine {
     }
 
     lineNumberAt(offset) {
-        const safe = Math.max(0, Math.min(Number(offset) || 0, this.el.value.length));
-        return this.el.value.slice(0, safe).split('\n').length;
+        const safe = Math.max(0, Math.min(Number(offset) || 0, this.model.value.length));
+        const starts = this.model.lineStarts;
+        let low = 0;
+        let high = starts.length - 1;
+        while (low <= high) {
+            const middle = (low + high) >> 1;
+            if (starts[middle] <= safe) low = middle + 1;
+            else high = middle - 1;
+        }
+        return Math.max(1, high + 1);
     }
 
     columnAt(offset) {
-        const safe = Math.max(0, Math.min(Number(offset) || 0, this.el.value.length));
-        return safe - this.el.value.lastIndexOf('\n', safe - 1);
+        const safe = Math.max(0, Math.min(Number(offset) || 0, this.model.value.length));
+        const line = this.lineNumberAt(safe);
+        return safe - this.model.lineStarts[line - 1] + 1;
     }
 
     offsetAt(line, column = 1) {
-        const lines = this.el.value.split('\n');
-        const index = Math.max(0, Math.min(lines.length - 1, Number(line) - 1));
-        let offset = 0;
-        for (let i = 0; i < index; i++) offset += lines[i].length + 1;
-        return Math.min(offset + Math.max(0, Number(column) - 1), offset + lines[index].length);
+        const index = Math.max(0, Math.min(this.model.lineStarts.length - 1, (Number(line) || 1) - 1));
+        const start = this.model.lineStarts[index];
+        const next = index + 1 < this.model.lineStarts.length ? this.model.lineStarts[index + 1] : this.model.value.length;
+        const terminatorLength = next > start && this.model.value[next - 1] === '\n' ? (this.model.value[next - 2] === '\r' ? 2 : 1) : 0;
+        const lineLength = Math.max(0, next - start - terminatorLength);
+        return Math.min(start + Math.max(0, Number(column) - 1), start + lineLength);
     }
 
     currentLocation() {
@@ -154,23 +274,82 @@ class JungleTextEngine {
 
     languageProfile() {
         const file = this.currentFile().toLowerCase();
-        if (/\.(html?|xml|svg)$/.test(file)) return { line: null, block: ['<!--', '-->'], keywords: ['doctype', 'class', 'id', 'script', 'style'] };
-        if (/\.(css|scss|less)$/.test(file)) return { line: null, block: ['/*', '*/'], keywords: ['display', 'position', 'margin', 'padding', 'color', 'background'] };
-        if (/\.(py|pyw)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'class', 'import', 'from', 'return', 'async', 'await', 'match', 'case'] };
-        if (/\.(rb)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'class', 'module', 'end', 'require', 'yield'] };
-        if (/\.(sh|bash|zsh|fish|yml|yaml|toml|r|pl|pm|jl|nim)$/.test(file)) return { line: '# ', block: null, keywords: ['if', 'then', 'fi', 'for', 'in', 'do', 'done'] };
-        if (/\.(sql)$/.test(file)) return { line: '-- ', block: ['/*', '*/'], keywords: ['select', 'from', 'where', 'join', 'group', 'order', 'limit'] };
-        if (/\.(lua)$/.test(file)) return { line: '-- ', block: ['--[[', ']]'], keywords: ['function', 'local', 'require', 'return', 'if', 'then', 'end'] };
-        if (/\.(hs|haskell)$/.test(file)) return { line: '-- ', block: ['{-', '-}'], keywords: ['module', 'import', 'where', 'let', 'in', 'case', 'of', 'data'] };
-        if (/\.(erl)$/.test(file)) return { line: '% ', block: null, keywords: ['module', 'export', 'receive', 'case', 'of', 'end'] };
-        if (/\.(ex|exs)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'defmodule', 'use', 'alias', 'case', 'fn', 'do', 'end'] };
-        if (/\.(fs|f90|for|f)$/.test(file)) return { line: '! ', block: null, keywords: ['module', 'use', 'subroutine', 'function', 'end'] };
-        if (/\.(lisp|clj|cljc|scm)$/.test(file)) return { line: '; ', block: null, keywords: ['defn', 'let', 'fn', 'require', 'ns'] };
-        return { line: '// ', block: ['/*', '*/'], keywords: ['const', 'let', 'var', 'function', 'class', 'return', 'if', 'else', 'for', 'while', 'import', 'export', 'async', 'await'] };
+        const cLike = ['const', 'let', 'var', 'function', 'class', 'interface', 'type', 'return', 'if', 'else', 'for', 'while', 'switch', 'case', 'try', 'catch', 'finally', 'import', 'export', 'async', 'await', 'new', 'this', 'true', 'false', 'null'];
+        const base = { line: '// ', block: ['/*', '*/'], keywords: cLike, indentAfter: /(?:\{|\[|\(|=>|\b(?:else|try|finally|do|case|default))\s*$/ };
+        if (/\.(html?|xml|svg)$/.test(file)) return { line: null, block: ['<!--', '-->'], keywords: ['doctype', 'html', 'head', 'body', 'script', 'style', 'class', 'id', 'aria', 'data'], indentAfter: /<[^/!][^>]*>\s*$/ };
+        if (/\.(css|scss|less)$/.test(file)) return { line: null, block: ['/*', '*/'], keywords: ['display', 'position', 'margin', 'padding', 'color', 'background', 'grid', 'flex', 'width', 'height', 'var'], indentAfter: /\{\s*$/ };
+        if (/\.(json|jsonc)$/.test(file)) return { line: null, block: ['/*', '*/'], keywords: ['true', 'false', 'null'], indentAfter: /[\{\[]\s*$/ };
+        if (/\.(py|pyw)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'class', 'import', 'from', 'return', 'async', 'await', 'match', 'case', 'if', 'elif', 'else', 'for', 'while', 'try', 'except', 'finally', 'with', 'yield', 'lambda', 'True', 'False', 'None'], indentAfter: /:\s*(?:#.*)?$/ };
+        if (/\.(rb)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'class', 'module', 'end', 'require', 'yield', 'if', 'unless', 'case', 'when', 'do', 'begin', 'rescue'] , indentAfter: /\b(?:do|else|begin|case|when)\s*$/ };
+        if (/\.(sh|bash|zsh|fish|yml|yaml|toml|r|pl|pm|jl|nim)$/.test(file)) return { line: '# ', block: null, keywords: ['if', 'then', 'fi', 'for', 'in', 'do', 'done', 'function', 'case', 'esac', 'return'], indentAfter: /\b(?:then|do|else|case)\s*$/ };
+        if (/\.(sql)$/.test(file)) return { line: '-- ', block: ['/*', '*/'], keywords: ['select', 'from', 'where', 'join', 'left', 'right', 'inner', 'group', 'order', 'having', 'limit', 'offset', 'insert', 'update', 'delete', 'create', 'alter', 'with', 'as'], indentAfter: /\b(?:select|from|where|join|group by|order by|having|with)\s*$/i };
+        if (/\.(lua)$/.test(file)) return { line: '-- ', block: ['--[[', ']]'], keywords: ['function', 'local', 'require', 'return', 'if', 'then', 'elseif', 'else', 'end', 'for', 'while', 'repeat', 'until'], indentAfter: /\b(?:then|do|function|else|elseif)\s*$/ };
+        if (/\.(hs|haskell)$/.test(file)) return { line: '-- ', block: ['{-', '-}'], keywords: ['module', 'import', 'where', 'let', 'in', 'case', 'of', 'data', 'type', 'newtype'], indentAfter: /\b(?:where|let|of|do)\s*$/ };
+        if (/\.(erl)$/.test(file)) return { line: '% ', block: null, keywords: ['module', 'export', 'receive', 'case', 'of', 'end', 'fun', 'spawn'], indentAfter: /\b(?:case|of|receive|fun)\s*$/ };
+        if (/\.(ex|exs)$/.test(file)) return { line: '# ', block: null, keywords: ['def', 'defmodule', 'use', 'alias', 'case', 'fn', 'do', 'end', 'cond', 'with'], indentAfter: /\b(?:do|else|fn|case|cond)\s*$/ };
+        if (/\.(fs|f90|for|f)$/.test(file)) return { line: '! ', block: null, keywords: ['module', 'use', 'subroutine', 'function', 'end', 'do', 'if', 'then', 'else'], indentAfter: /\b(?:then|do|else)\s*$/i };
+        if (/\.(lisp|clj|cljc|scm)$/.test(file)) return { line: '; ', block: null, keywords: ['defn', 'def', 'let', 'fn', 'require', 'ns', 'if', 'cond', 'case', 'loop', 'recur'] , indentAfter: /[\(]\s*$/ };
+        if (/\.(rs)$/.test(file)) return { ...base, keywords: [...cLike, 'fn', 'pub', 'struct', 'enum', 'impl', 'trait', 'match', 'loop', 'move', 'mut', 'use', 'mod', 'crate', 'where'] };
+        if (/\.(go)$/.test(file)) return { ...base, keywords: ['package', 'import', 'func', 'type', 'struct', 'interface', 'var', 'const', 'return', 'if', 'else', 'for', 'range', 'switch', 'case', 'go', 'defer', 'select', 'chan'] };
+        if (/\.(java|kt|kts|scala)$/.test(file)) return { ...base, keywords: [...cLike, 'public', 'private', 'protected', 'static', 'void', 'int', 'boolean', 'extends', 'implements', 'package', 'throws', 'fun', 'val', 'var', 'object'] };
+        if (/\.(cs)$/.test(file)) return { ...base, keywords: [...cLike, 'namespace', 'using', 'public', 'private', 'protected', 'internal', 'static', 'void', 'string', 'int', 'bool', 'async', 'await', 'record', 'get', 'set'] };
+        if (/\.(c|h|cc|cpp|cxx|hpp)$/.test(file)) return { ...base, keywords: [...cLike, 'include', 'define', 'ifdef', 'ifndef', 'endif', 'struct', 'enum', 'namespace', 'template', 'public', 'private', 'virtual', 'override', 'auto', 'nullptr'] };
+        if (/\.(php)$/.test(file)) return { ...base, keywords: [...cLike, 'function', 'echo', 'namespace', 'use', 'public', 'private', 'protected', 'trait', 'extends', 'implements'] };
+        if (/\.(swift)$/.test(file)) return { ...base, keywords: [...cLike, 'func', 'struct', 'enum', 'protocol', 'extension', 'guard', 'defer', 'let', 'var', 'init', 'import'] };
+        return base;
     }
 
     indentationForLine(line) {
         return (String(line).match(/^\s*/) || [''])[0];
+    }
+
+    indentationUnitForLine(line) {
+        const whitespace = this.indentationForLine(line);
+        if (/\t/.test(whitespace)) return '\t';
+        const width = whitespace.match(/ {2,}/)?.[0]?.length || this.indent.length;
+        return ' '.repeat(Math.max(1, width));
+    }
+
+    computeIndentForEnter(start = this.el.selectionStart) {
+        const value = this.model.value;
+        const before = value.slice(0, start);
+        const lineStart = before.lastIndexOf('\n') + 1;
+        const line = before.slice(lineStart);
+        const profile = this.languageProfile();
+        let padding = this.indentationForLine(line);
+        const codeLine = line.replace(/(?:\/\/|#|--|;|%).*$/, '').trimEnd();
+        if (profile.indentAfter?.test(codeLine)) padding += this.indent;
+
+        // Align continued calls/arrays with the first character after the
+        // unmatched opener, which is much closer to Monaco's smart indent.
+        const openers = [];
+        const mask = this.lexicalMask();
+        for (let index = lineStart - 1; index >= 0; index--) {
+            if (!mask[index]) continue;
+            const char = value[index];
+            if ('([{'.includes(char)) openers.push(index);
+            else if (')]}'.includes(char) && openers.length) openers.pop();
+        }
+        const opener = openers[openers.length - 1];
+        if (opener >= lineStart && /[\[\(]/.test(value[opener])) {
+            const openerLineStart = value.lastIndexOf('\n', opener - 1) + 1;
+            const openerColumn = opener - openerLineStart;
+            padding = ' '.repeat(openerColumn + 1);
+        }
+        const next = value.slice(start).match(/^\s*([}\])]|else\b|elif\b|catch\b|except\b|finally\b|case\b|default\b)/);
+        if (next) padding = padding.slice(0, Math.max(0, padding.length - this.indent.length));
+        return padding;
+    }
+
+    scheduleSuggestions() {
+        clearTimeout(this.suggestTimer);
+        const value = this.model.value;
+        if (value.length > 250000 || this.composing || this.el.selectionStart !== this.el.selectionEnd) return;
+        const before = value.slice(0, this.el.selectionStart);
+        if (!/[A-Za-z_$\.]$/.test(before)) return;
+        this.suggestTimer = setTimeout(() => {
+            if (document.activeElement === this.el) this.showSuggestions({ automatic: true });
+        }, 140);
     }
 
     indentSelection(outdent = false) {
@@ -458,25 +637,54 @@ class JungleTextEngine {
     }
 
     completionWords() {
-        const profile = this.languageProfile();
-        const sourceWords = this.el.value.match(/[A-Za-z_$][\w$]*/g) || [];
-        return [...new Set([...profile.keywords, ...sourceWords])];
+        return this.completionItems().map(item => item.label);
     }
 
-    showSuggestions() {
-        const before = this.el.value.slice(0, this.el.selectionStart);
+    completionItems() {
+        const profile = this.languageProfile();
+        const items = new Map();
+        const add = (label, detail = '', kind = 'keyword', insertText = label) => {
+            if (!label || items.has(label)) return;
+            items.set(label, { label, insertText, detail, kind });
+        };
+        profile.keywords.forEach(word => add(word, 'language keyword'));
+        (this.model.value.match(/[A-Za-z_$][\w$]*/g) || []).forEach(word => add(word, 'document symbol', 'symbol'));
+        try {
+            const project = JungleUI.getCurrentProject?.();
+            Object.entries(project?.files || {}).forEach(([file, code]) => {
+                const source = String(code || '');
+                const symbolPattern = /\b(?:class|interface|struct|enum|function|func|fn|def|sub|async\s+def)\s+([A-Za-z_$][\w$]*)/g;
+                let match;
+                while ((match = symbolPattern.exec(source))) add(match[1], file, 'project symbol');
+                if (file !== this.currentFile()) add(file.split('/').pop(), `file: ${file}`, 'file');
+            });
+        } catch (_) {}
+        return [...items.values()];
+    }
+
+    showSuggestions({ automatic = false } = {}) {
+        const before = this.model.value.slice(0, this.el.selectionStart);
         const match = before.match(/[A-Za-z_$][\w$]*$/);
-        if (!match) return;
-        const word = match[0];
-        const words = this.completionWords().filter(item => item.length > 1 && item !== word && item.toLowerCase().startsWith(word.toLowerCase())).slice(0, 12);
-        if (!words.length) return;
-        this.suggestions = words;
+        if (!match && automatic) return;
+        const word = match?.[0] || '';
+        const lower = word.toLowerCase();
+        const items = this.completionItems().filter(item => item.label.length > 1 && item.label !== word && item.label.toLowerCase().startsWith(lower));
+        items.sort((a, b) => (a.kind === 'symbol' ? -1 : 0) - (b.kind === 'symbol' ? -1 : 0) || a.label.localeCompare(b.label));
+        const visible = items.slice(0, 16);
+        if (!visible.length) { this.hideSuggestions(); return; }
+        this.suggestions = visible;
         this.suggestIndex = 0;
         this.suggestPanel.innerHTML = '';
-        words.forEach((item, index) => {
+        visible.forEach((item, index) => {
             const node = document.createElement('div');
             node.className = `jungle-suggest-item${index === 0 ? ' active' : ''}`;
-            node.textContent = item;
+            node.textContent = item.label;
+            if (item.detail) {
+                const detail = document.createElement('small');
+                detail.textContent = `  ${item.detail}`;
+                detail.style.opacity = '0.6';
+                node.appendChild(detail);
+            }
             node.setAttribute('role', 'option');
             node.addEventListener('mousedown', event => { event.preventDefault(); this.acceptSuggestion(item); });
             this.suggestPanel.appendChild(node);
@@ -494,13 +702,38 @@ class JungleTextEngine {
         this.suggestPanel.querySelectorAll('.jungle-suggest-item').forEach((node, index) => node.classList.toggle('active', index === this.suggestIndex));
     }
 
-    acceptSuggestion(word) {
-        const match = this.el.value.slice(0, this.el.selectionStart).match(/[A-Za-z_$][\w$]*$/);
-        if (match) this.change(this.el.selectionStart - match[0].length, this.el.selectionStart, word, this.el.selectionStart - match[0].length + word.length);
+    acceptSuggestion(item) {
+        const suggestion = typeof item === 'string' ? { label: item, insertText: item } : item;
+        if (!suggestion) return;
+        const match = this.model.value.slice(0, this.el.selectionStart).match(/[A-Za-z_$][\w$]*$/);
+        if (match) {
+            const text = suggestion.insertText || suggestion.label;
+            this.change(this.el.selectionStart - match[0].length, this.el.selectionStart, text, this.el.selectionStart - match[0].length + text.length);
+        }
         this.hideSuggestions();
     }
 
     hideSuggestions() { this.suggestPanel?.classList.remove('show'); }
+
+    selectNextOccurrence() {
+        const start = this.el.selectionStart;
+        const end = this.el.selectionEnd;
+        const selected = this.model.value.slice(start, end);
+        if (!selected) return this.selectWord();
+        const next = this.model.value.indexOf(selected, end);
+        const target = next >= 0 ? next : this.model.value.indexOf(selected);
+        if (target >= 0 && target !== start) this.setSelection(target, target + selected.length);
+    }
+
+    jumpToMatchingBracket() {
+        const match = this.findMatchingBracket();
+        if (match >= 0) this.setSelection(match, match + 1);
+    }
+
+    normalizeDocument() {
+        const value = this.model.value.replace(/\r\n?/g, '\n').replace(/[ \t]+(?=\n|$)/g, '');
+        if (value !== this.model.value) this.change(0, this.model.value.length, value, Math.min(this.el.selectionStart, value.length), Math.min(this.el.selectionEnd, value.length));
+    }
 
     addCommand(id, title, action) { this.commands.set(id, { id, title, action }); }
 
@@ -508,8 +741,10 @@ class JungleTextEngine {
         this.addCommand('find', 'Find', () => this.showFind(false));
         this.addCommand('replace', 'Find and Replace', () => this.showFind(true));
         this.addCommand('goto', 'Go to Line', () => this.goToLine());
+        this.addCommand('jumpBracket', 'Go to Matching Bracket', () => this.jumpToMatchingBracket());
         this.addCommand('selectLine', 'Select Current Line', () => this.selectLine());
         this.addCommand('selectWord', 'Select Word', () => this.selectWord());
+        this.addCommand('selectNext', 'Select Next Occurrence', () => this.selectNextOccurrence());
         this.addCommand('duplicate', 'Duplicate Line', () => this.duplicateLine());
         this.addCommand('moveUp', 'Move Line Up', () => this.moveLine(-1));
         this.addCommand('moveDown', 'Move Line Down', () => this.moveLine(1));
@@ -519,6 +754,7 @@ class JungleTextEngine {
         this.addCommand('trimWhitespace', 'Trim Trailing Whitespace', () => this.trimTrailingWhitespace());
         this.addCommand('sortLines', 'Sort Selected Lines', () => this.sortSelectedLines());
         this.addCommand('joinLines', 'Join Selected Lines', () => this.joinSelectedLines());
+        this.addCommand('normalize', 'Normalize Document Whitespace', () => this.normalizeDocument());
         this.addCommand('selectAll', 'Select All', () => { this.el.focus(); this.el.select(); });
         this.addCommand('uppercase', 'Transform Selection to Uppercase', () => this.transformSelection(text => text.toUpperCase()));
         this.addCommand('lowercase', 'Transform Selection to Lowercase', () => this.transformSelection(text => text.toLowerCase()));
@@ -575,22 +811,74 @@ class JungleTextEngine {
         command.action();
     }
 
+    lexicalMask() {
+        if (this.lexicalCache.versionId === this.model.versionId && this.lexicalCache.mask) return this.lexicalCache.mask;
+        const value = this.model.value;
+        const mask = new Uint8Array(value.length);
+        const profile = this.languageProfile();
+        const lineMarker = profile.line ? profile.line.trimEnd() : '';
+        const blockStart = profile.block?.[0] || '';
+        const blockEnd = profile.block?.[1] || '';
+        let state = 'code';
+        let quote = '';
+        let escaped = false;
+        for (let index = 0; index < value.length; index++) {
+            const char = value[index];
+            if (state === 'line') {
+                if (char === '\n') { state = 'code'; mask[index] = 1; }
+                continue;
+            }
+            if (state === 'block') {
+                if (blockEnd && value.startsWith(blockEnd, index)) { state = 'code'; index += blockEnd.length - 1; }
+                continue;
+            }
+            if (state === 'string') {
+                if (escaped) { escaped = false; continue; }
+                if (char === '\\') { escaped = true; continue; }
+                if (char === quote) { state = 'code'; quote = ''; }
+                continue;
+            }
+            if (blockStart && value.startsWith(blockStart, index)) { state = 'block'; index += blockStart.length - 1; continue; }
+            if (lineMarker && value.startsWith(lineMarker, index)) { state = 'line'; index += lineMarker.length - 1; continue; }
+            if (char === '"' || char === "'" || char === '`') { state = 'string'; quote = char; escaped = false; continue; }
+            mask[index] = 1;
+        }
+        this.lexicalCache = { versionId: this.model.versionId, mask };
+        return mask;
+    }
+
     findMatchingBracket(position = this.el.selectionStart) {
-        const value = this.el.value;
+        const value = this.model.value;
+        const mask = this.lexicalMask();
         const pairs = { '(': ')', '[': ']', '{': '}' };
+        const opening = new Set(Object.keys(pairs));
         const closing = { ')': '(', ']': '[', '}': '{' };
-        let at = value[position];
-        if (!pairs[at] && !closing[at] && position > 0) { position--; at = value[position]; }
+        let atPosition = Math.max(0, Math.min(Number(position) || 0, value.length));
+        let at = value[atPosition];
+        if (!pairs[at] && !closing[at] && atPosition > 0) { atPosition--; at = value[atPosition]; }
         if (!pairs[at] && !closing[at]) return -1;
-        const step = pairs[at] ? 1 : -1;
-        const target = pairs[at] || closing[at];
-        let depth = 0;
-        for (let i = position; i >= 0 && i < value.length; i += step) {
-            const char = value[i];
-            if (char === at) depth++;
-            if (char === target) {
-                depth--;
-                if (depth === 0) return i;
+        if (!mask[atPosition]) return -1;
+        if (opening.has(at)) {
+            const stack = [at];
+            for (let index = atPosition + 1; index < value.length; index++) {
+                if (!mask[index]) continue;
+                const char = value[index];
+                if (opening.has(char)) stack.push(char);
+                else if (closing[char] === stack[stack.length - 1]) {
+                    stack.pop();
+                    if (!stack.length) return index;
+                }
+            }
+            return -1;
+        }
+        const stack = [at];
+        for (let index = atPosition - 1; index >= 0; index--) {
+            if (!mask[index]) continue;
+            const char = value[index];
+            if (closing[char]) stack.push(char);
+            else if (pairs[char] === stack[stack.length - 1]) {
+                stack.pop();
+                if (!stack.length) return index;
             }
         }
         return -1;
@@ -632,6 +920,7 @@ class JungleTextEngine {
         if (mod && event.shiftKey && key.toLowerCase() === 'p') return stop(() => this.showCommands());
         if (mod && key.toLowerCase() === 'h') return stop(() => this.showFind(true));
         if (mod && key.toLowerCase() === 'g') return stop(() => this.goToLine());
+        if (mod && !event.shiftKey && key.toLowerCase() === 'd') return stop(() => this.selectNextOccurrence());
         if (mod && event.shiftKey && key.toLowerCase() === 'd') return stop(() => this.duplicateLine());
         if (mod && key === '/') return stop(() => this.toggleComment());
         if (this.suggestPanel?.classList.contains('show')) {
@@ -649,16 +938,15 @@ class JungleTextEngine {
             const right = this.el.value[position];
             const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
             if (left && pairs[left] === right) return stop(() => this.change(position - 1, position + 1, '', position - 1));
+            const before = this.el.value.slice(0, position);
+            const line = before.slice(before.lastIndexOf('\n') + 1);
+            const unit = this.indentationUnitForLine(line);
+            if (!line.trim() && line.length >= unit.length && line.endsWith(unit)) return stop(() => this.change(position - unit.length, position, '', position - unit.length));
         }
         if (key === 'Tab') return stop(() => this.indentSelection(event.shiftKey));
         if (key === 'Enter') return stop(() => {
             const start = this.el.selectionStart;
-            const before = this.el.value.slice(0, start);
-            const line = before.slice(before.lastIndexOf('\n') + 1);
-            let padding = this.indentationForLine(line);
-            const trimmed = line.trimEnd();
-            if (/[{[(]\s*$/.test(trimmed) || /:\s*(?:[#].*)?$/.test(trimmed)) padding += this.indent;
-            if (/^[}\])]/.test(this.el.value.slice(start).trimStart())) padding = padding.slice(0, Math.max(0, padding.length - this.indent.length));
+            const padding = this.computeIndentForEnter(start);
             this.change(start, this.el.selectionEnd, '\n' + padding, start + 1 + padding.length);
         });
         const pairs = { '(': ')', '[': ']', '{': '}', '"': '"', "'": "'", '`': '`' };
