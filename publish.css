@@ -31,8 +31,8 @@
 .publish-result-row button { flex-shrink:0; border:1px solid #4e7564; border-radius:6px; background:#172b22; color:#c8ddd8; padding:7px 9px; cursor:pointer; font-size:.75rem; font-weight:700; }
 .publish-result-row button:hover { background:#274639; color:#fff; }
 #publish-project-header-btn { order:2; width:28px; height:28px; display:grid; place-items:center; flex-shrink:0; padding:0; border:1px solid #354a41; border-radius:6px; background:#161c1a; color:#aed9cb; cursor:pointer; }
-#split-editor-btn { order:1; }
-.tools-control { order:3; }
+#split-editor-btn { order:3; }
+.tools-control { order:1; }
 #publish-project-header-btn svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 #publish-project-header-btn:hover { background:#1c3028; border-color:#74a896; color:#fff; }
 
