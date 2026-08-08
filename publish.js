@@ -1,14 +1,15 @@
 // Project publishing flow.
 //
 // Set window.JUNGLE_PUBLISH_API to a POST endpoint for durable cloud hosting.
-// Until that service is configured, the generated jungle.app link carries a
-// compact URL snapshot so the UI remains testable without pretending that a
-// static GitHub Pages site is a database or an access-control server.
+// Until that service is configured, the generated link points back to the
+// deployed editor and carries a compact URL snapshot. A static GitHub Pages
+// site cannot reserve subdomains or provide durable storage by itself.
 (function initJunglePublishing() {
     const screen = document.getElementById('publish-screen');
     const openButton = document.getElementById('publish-project-header-btn');
     const backButton = document.getElementById('publish-back-btn');
     const nameInput = document.getElementById('publish-name-input');
+    const domainSuffix = document.getElementById('publish-domain-suffix') || document.querySelector('.publish-domain-suffix');
     const publicToggle = document.getElementById('publish-public-toggle');
     const currentProjectLabel = document.getElementById('publish-current-project');
     const nameHelp = document.getElementById('publish-name-help');
@@ -73,7 +74,24 @@
     }
 
     function fallbackLink(slug, snapshot) {
-        return `https://${slug}.jungle.app/#jungle-project=${encodeSnapshot(snapshot)}`;
+        return `${editorBaseUrl()}#jungle-project=${encodeSnapshot(snapshot)}`;
+    }
+
+    function editorBaseUrl() {
+        const configured = String(window.JUNGLE_PUBLISH_BASE_URL || document.querySelector('meta[name="jungle-publish-base"]')?.content || '').trim();
+        if (configured) return configured.split('#')[0];
+
+        const current = window.location.href.split('#')[0];
+        try {
+            const currentUrl = new URL(current, window.location.href);
+            // jungle.app currently serves Jungle Commerce. Never send a
+            // snapshot there unless a real publisher endpoint supplied the
+            // URL, otherwise the snapshot is swallowed by the Commerce login.
+            if (currentUrl.hostname === 'jungle.app' || currentUrl.hostname.endsWith('.jungle.app')) {
+                return 'https://fpsvic.github.io/jungle-editor/';
+            }
+        } catch (_) {}
+        return current;
     }
 
     function publisherEndpoint() {
@@ -82,10 +100,14 @@
 
     function updateNamePreview() {
         const slug = slugify(nameInput.value);
+        const hasPublisher = Boolean(publisherEndpoint());
+        if (domainSuffix) domainSuffix.textContent = hasPublisher ? '.jungle.app' : 'share link';
         if (!slug) {
             nameHelp.textContent = 'Use letters, numbers, and hyphens. Spaces are converted to hyphens.';
         } else if (isReservedSlug(slug)) {
             nameHelp.textContent = `${slug}.jungle.app is reserved. Choose another name.`;
+        } else if (!hasPublisher) {
+            nameHelp.textContent = 'The project name is saved in the share link. It will open directly in Jungle Editor.';
         } else {
             nameHelp.textContent = `Your address will be https://${slug}.jungle.app`;
         }
@@ -135,8 +157,8 @@
         return {
             url,
             note: snapshot.visibility === 'public'
-                ? 'Share link prepared. Connect a publisher API for durable cloud hosting.'
-                : 'Private link prepared as an unlisted snapshot. Connect a publisher API for account-only access control.',
+                ? 'Share link prepared. It opens in Jungle Editor; connect a publisher API for a durable custom .jungle.app address.'
+                : 'Private link prepared as an unlisted snapshot. Connect a publisher API for account-only access control and durable hosting.',
         };
     }
 
