@@ -98,13 +98,17 @@ class JungleStorage {
             const fileNames = Object.keys(files);
             const currentFile = project && files[project.currentFile] !== undefined ? project.currentFile : fileNames[0];
             const lang = (project && project.lang) || JungleIntelligence.languageFromFilename(currentFile, 'HTML');
+            const agentSessions = Array.isArray(project && project.agentSessions) ? project.agentSessions : [];
+            const activeAgentSessionId = typeof (project && project.activeAgentSessionId) === 'string' ? project.activeAgentSessionId : '';
             return {
                 id: (project && project.id) || `proj_${Date.now()}_${index}`,
                 name: (project && project.name) || `Project ${index + 1}`,
                 files,
                 folders: Array.isArray(project && project.folders) ? project.folders : [],
                 currentFile,
-                lang
+                lang,
+                agentSessions,
+                activeAgentSessionId
             };
         });
     }

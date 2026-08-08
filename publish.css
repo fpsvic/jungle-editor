@@ -1,0 +1,60 @@
+.publish-screen { position:fixed; inset:0; z-index:10001; display:none; overflow-y:auto; background:radial-gradient(circle at top, #15221d 0%, #06090a 58%); color:#dce9e4; }
+.publish-screen.visible { display:block; }
+.publish-header { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:18px; padding:18px clamp(18px,5vw,72px); background:rgba(6,9,10,.9); border-bottom:1px solid #263b31; backdrop-filter:blur(12px); color:#aed9cb; font-weight:700; }
+.publish-header button { border:1px solid #415c4f; background:#172420; color:#dce9e4; border-radius:7px; padding:8px 13px; cursor:pointer; font:inherit; }
+.publish-header button:hover { background:#24342e; color:#fff; }
+.publish-body { min-height:calc(100vh - 76px); display:grid; place-items:start center; box-sizing:border-box; padding:clamp(28px,7vh,90px) 20px 90px; }
+.publish-card { width:min(670px,100%); box-sizing:border-box; padding:clamp(24px,5vw,48px); border:1px solid #2e493c; border-radius:18px; background:linear-gradient(145deg,#111b17,#0b100e); box-shadow:0 24px 80px #0008; }
+.publish-kicker { margin:0 0 12px; color:#74a896; letter-spacing:.16em; font-size:.72rem; font-weight:800; }
+.publish-card h1 { margin:0 0 12px; color:#eff8f3; font-size:clamp(2rem,5vw,3.4rem); line-height:1; letter-spacing:-.04em; }
+.publish-description { margin:0 0 28px; color:#a8bdb3; line-height:1.6; font-size:.95rem; }
+.publish-project-current { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:24px; padding:13px 15px; border:1px solid #263b31; border-radius:9px; background:#0d1511; }
+.publish-project-current strong { min-width:0; overflow:hidden; color:#dce9e4; text-overflow:ellipsis; white-space:nowrap; }
+.publish-label,.publish-result-label { display:block; margin-bottom:8px; color:#aed9cb; font-size:.76rem; font-weight:800; letter-spacing:.04em; text-transform:uppercase; }
+.publish-name-row { display:flex; align-items:stretch; width:100%; }
+.publish-name-row input { min-width:0; flex:1; box-sizing:border-box; border:1px solid #3b5c4c; border-right:0; border-radius:8px 0 0 8px; background:#080c0a; color:#eef8f4; padding:13px 14px; outline:none; font:15px 'Fira Code',monospace; }
+.publish-name-row input:focus { border-color:#74a896; box-shadow:0 0 0 2px rgba(116,168,150,.15); }
+.publish-domain-suffix { display:flex; align-items:center; padding:0 13px; border:1px solid #3b5c4c; border-radius:0 8px 8px 0; background:#17241d; color:#9fc8ba; font:14px 'Fira Code',monospace; white-space:nowrap; }
+.publish-help { min-height:1.2em; margin:8px 0 22px; color:#789087; font-size:.76rem; line-height:1.5; }
+.publish-visibility-row { display:flex; align-items:flex-start; gap:11px; margin:24px 0 11px; color:#dce9e4; cursor:pointer; }
+.publish-visibility-row input { width:17px; height:17px; margin:2px 0 0; accent-color:#74a896; }
+.publish-visibility-row span { display:flex; flex-direction:column; gap:3px; }
+.publish-visibility-row strong { font-size:.9rem; }
+.publish-visibility-row small { color:#789087; font-size:.75rem; line-height:1.4; }
+.publish-private-note { margin:0 0 24px; padding:10px 12px; border-left:2px solid #528b74; background:#101a15; color:#879d92; font-size:.76rem; line-height:1.45; }
+.publish-submit-btn { width:100%; padding:14px 20px; border:1px solid #74a896; border-radius:9px; background:#2f6a52; color:#fff; cursor:pointer; font:700 1rem Inter,sans-serif; box-shadow:0 8px 22px rgba(47,106,82,.25); transition:background .18s,transform .18s,box-shadow .18s; }
+.publish-submit-btn:hover { background:#3d8063; transform:translateY(-1px); box-shadow:0 12px 28px rgba(47,106,82,.35); }
+.publish-submit-btn:disabled { opacity:.55; cursor:wait; transform:none; }
+.publish-result { margin-top:24px; padding:15px; border:1px solid #3f6754; border-radius:10px; background:#102018; }
+.publish-result-row { display:flex; align-items:center; gap:9px; }
+.publish-result-row a { min-width:0; flex:1; overflow:hidden; color:#9bd6bc; text-overflow:ellipsis; white-space:nowrap; font:13px 'Fira Code',monospace; }
+.publish-result-row button { flex-shrink:0; border:1px solid #4e7564; border-radius:6px; background:#172b22; color:#c8ddd8; padding:7px 9px; cursor:pointer; font-size:.75rem; font-weight:700; }
+.publish-result-row button:hover { background:#274639; color:#fff; }
+#publish-project-header-btn { order:2; width:28px; height:28px; display:grid; place-items:center; flex-shrink:0; padding:0; border:1px solid #354a41; border-radius:6px; background:#161c1a; color:#aed9cb; cursor:pointer; }
+#split-editor-btn { order:1; }
+.tools-control { order:3; }
+#publish-project-header-btn svg { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
+#publish-project-header-btn:hover { background:#1c3028; border-color:#74a896; color:#fff; }
+
+body.theme-light .publish-screen { background:linear-gradient(180deg,#f7faf8,#fff); color:#111; }
+body.theme-light .publish-header { background:rgba(247,250,248,.92); border-color:#d7dedb; color:#111; }
+body.theme-light .publish-header button { background:#fff; border-color:#aaa; color:#111; }
+body.theme-light .publish-card { background:#fff; border-color:#cbd7d1; box-shadow:0 20px 55px rgba(0,0,0,.12); }
+body.theme-light .publish-card h1 { color:#111; }
+body.theme-light .publish-description, body.theme-light .publish-help, body.theme-light .publish-visibility-row small { color:#5a6570; }
+body.theme-light .publish-project-current { background:#f5f7f6; border-color:#d7dedb; }
+body.theme-light .publish-project-current strong { color:#222; }
+body.theme-light .publish-label, body.theme-light .publish-result-label { color:#1b4936; }
+body.theme-light .publish-name-row input { background:#fff; color:#111; border-color:#9eafa6; }
+body.theme-light .publish-domain-suffix { background:#edf3f0; color:#214438; border-color:#9eafa6; }
+body.theme-light .publish-private-note { background:#f0f6f2; color:#536a60; }
+body.theme-light .publish-result { background:#edf7f1; border-color:#9bc2ad; }
+body.theme-light .publish-result-row button { background:#fff; color:#214438; border-color:#6d8c7e; }
+body.theme-light #publish-project-header-btn { background:#fff; color:#111; border-color:#aaa; }
+
+@media (max-width: 620px) {
+    .publish-card { padding:24px 18px; }
+    .publish-domain-suffix { padding:0 8px; font-size:12px; }
+    .publish-result-row { align-items:stretch; flex-direction:column; }
+    .publish-result-row button { width:100%; }
+}

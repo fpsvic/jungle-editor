@@ -22,6 +22,11 @@
                 <button id="agent-expand" title="Extend upward" aria-label="Extend agent panel upward">↑</button>
                 <button id="agent-close" title="Close" aria-label="Close agent panel">×</button>
             </div>
+            <div class="agent-session-bar" aria-label="Chat sessions">
+                <button id="agent-new-session" class="agent-new-session" type="button">New session</button>
+                <select id="agent-session-select" class="agent-session-select" aria-label="Chat session"></select>
+                <span id="agent-activity" class="agent-activity" aria-live="polite"></span>
+            </div>
             <div class="agent-connect hidden" id="agent-connect" aria-hidden="true">
                 <p>Enter an API key. Jungle Editor detects supported providers and loads their available models. The key stays in this browser tab.</p>
                 <input id="agent-api-key" type="password" placeholder="enter a API key" autocomplete="off">
@@ -31,7 +36,14 @@
             <div class="agent-messages" id="agent-messages"><div class="agent-empty">Ask the agent to explain code, fix a bug, or create and edit project files.</div></div>
             <div class="agent-composer">
                 <textarea id="agent-input" placeholder="Ask the coding agent to work with your code…"></textarea>
-                <select class="agent-model" id="agent-model" aria-label="Agent model"><option value="" selected>Connect a key to detect models</option></select>
+                <div class="agent-model-picker" id="agent-model-picker">
+                    <select class="agent-model agent-model-native" id="agent-model" aria-label="Agent model"><option value="" selected>Connect a key to detect models</option></select>
+                    <button class="agent-model-trigger" id="agent-model-trigger" type="button" aria-haspopup="listbox" aria-expanded="false">Connect a key to detect models</button>
+                    <div class="agent-model-menu" id="agent-model-menu" role="listbox" aria-label="Available models">
+                        <input class="agent-model-search" id="agent-model-search" type="search" placeholder="Search models..." aria-label="Search models" autocomplete="off">
+                        <div class="agent-model-options" id="agent-model-options"></div>
+                    </div>
+                </div>
                 <button class="agent-send" id="agent-send" type="button">Send</button>
             </div>
         </aside>`);
@@ -45,6 +57,14 @@
     const connect = document.getElementById('agent-connect');
     const keyInput = document.getElementById('agent-api-key');
     const endpointInput = document.getElementById('agent-api-endpoint');
+    const newSessionButton = document.getElementById('agent-new-session');
+    const sessionSelect = document.getElementById('agent-session-select');
+    const activity = document.getElementById('agent-activity');
+    const modelPicker = document.getElementById('agent-model-picker');
+    const modelTrigger = document.getElementById('agent-model-trigger');
+    const modelMenu = document.getElementById('agent-model-menu');
+    const modelSearch = document.getElementById('agent-model-search');
+    const modelOptions = document.getElementById('agent-model-options');
 
     function normalizeApiKey(value) {
         return String(value || '').trim()
@@ -73,7 +93,206 @@
     let apiEndpoint = normalizeApiEndpoint(sessionStorage.getItem('jungle_agent_api_endpoint') || '');
     endpointInput.value = apiEndpoint;
     let busy = false;
-    const conversation = [];
+    let conversation = [];
+    let sessions = [];
+    let activeSessionId = '';
+    let sessionProjectId = '';
+    let totalTokens = 0;
+    const MAX_SESSION_MESSAGES = 240;
+
+    function currentWorkspace() {
+        try { return window.JungleUI?.getCurrentProject?.() || null; } catch (_) { return null; }
+    }
+
+    function createSession(index) {
+        return {
+            id: `agent_session_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+            name: `Session ${index}`,
+            messages: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now()
+        };
+    }
+
+    function normalizeSession(value, index) {
+        const source = value && typeof value === 'object' ? value : {};
+        const messages = Array.isArray(source.messages) ? source.messages.map(item => ({
+            role: ['user', 'model', 'system'].includes(item?.role) ? item.role : 'system',
+            text: String(item?.text || '')
+        })).filter(item => item.text).slice(-MAX_SESSION_MESSAGES) : [];
+        return {
+            id: String(source.id || `agent_session_${Date.now()}_${index}`),
+            name: String(source.name || `Session ${index}`).trim().slice(0, 60) || `Session ${index}`,
+            messages,
+            createdAt: Number(source.createdAt) || Date.now(),
+            updatedAt: Number(source.updatedAt) || Date.now()
+        };
+    }
+
+    function activeSession() { return sessions.find(session => session.id === activeSessionId) || null; }
+
+    function persistSessions() {
+        const project = currentWorkspace();
+        if (!project || !sessions.length || typeof JungleStorage === 'undefined' || typeof projects === 'undefined') return;
+        project.agentSessions = sessions.map(session => ({
+            id: session.id,
+            name: session.name,
+            messages: session.messages.slice(-MAX_SESSION_MESSAGES),
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt
+        }));
+        project.activeAgentSessionId = activeSessionId;
+        try { JungleStorage.saveProjects(projects); } catch (_) {}
+    }
+
+    function renderSessionSelect() {
+        if (!sessionSelect) return;
+        sessionSelect.innerHTML = '';
+        sessions.forEach((session, index) => {
+            const option = document.createElement('option');
+            option.value = session.id;
+            option.textContent = session.name || `Session ${index + 1}`;
+            sessionSelect.appendChild(option);
+        });
+        sessionSelect.value = activeSessionId;
+    }
+
+    function renderSessionMessages() {
+        const session = activeSession();
+        messages.innerHTML = '';
+        if (!session || !session.messages.length) {
+            messages.innerHTML = '<div class="agent-empty">Ask the agent to explain code, fix a bug, or create and edit project files.</div>';
+        } else {
+            session.messages.forEach(item => addMessage(item.role, item.text, { persist: false }));
+        }
+        messages.scrollTop = messages.scrollHeight;
+    }
+
+    function loadActiveSession() {
+        const session = activeSession();
+        conversation = session ? session.messages.filter(item => item.role === 'user' || item.role === 'model').slice(-12).map(item => ({ role: item.role, text: item.text })) : [];
+        renderSessionSelect();
+        renderSessionMessages();
+    }
+
+    function ensureWorkspaceSessions() {
+        const project = currentWorkspace();
+        const projectId = project?.id || 'no-project';
+        if (sessionProjectId === projectId && sessions.length) {
+            renderSessionSelect();
+            return;
+        }
+        sessionProjectId = projectId;
+        const stored = Array.isArray(project?.agentSessions) ? project.agentSessions : [];
+        sessions = stored.map((item, index) => normalizeSession(item, index + 1));
+        if (!sessions.length) sessions = [createSession(1)];
+        const preferred = project?.activeAgentSessionId;
+        activeSessionId = sessions.some(session => session.id === preferred) ? preferred : sessions[0].id;
+        loadActiveSession();
+        if (project && (!Array.isArray(project.agentSessions) || project.agentSessions.length !== sessions.length || project.activeAgentSessionId !== activeSessionId)) persistSessions();
+    }
+
+    function switchSession(id) {
+        ensureWorkspaceSessions();
+        if (!sessions.some(session => session.id === id)) return;
+        activeSessionId = id;
+        loadActiveSession();
+        persistSessions();
+        input.focus();
+    }
+
+    function startNewSession() {
+        ensureWorkspaceSessions();
+        const session = createSession(sessions.length + 1);
+        sessions.push(session);
+        activeSessionId = session.id;
+        loadActiveSession();
+        persistSessions();
+        input.focus();
+    }
+
+    function storeSessionMessage(role, text) {
+        const session = activeSession();
+        if (!session || !text) return;
+        session.messages.push({ role, text: String(text) });
+        if (role === 'user' && session.messages.filter(item => item.role === 'user').length === 1 && /^Session \d+$/i.test(session.name)) {
+            session.name = String(text).replace(/\s+/g, ' ').trim().slice(0, 42) || session.name;
+        }
+        session.messages = session.messages.slice(-MAX_SESSION_MESSAGES);
+        session.updatedAt = Date.now();
+        persistSessions();
+        renderSessionSelect();
+    }
+
+    function setActivity(label = '', tokens = totalTokens) {
+        if (!activity) return;
+        activity.textContent = label ? `${label}... ${Math.max(0, Math.round(tokens || 0))} tokens` : '';
+        activity.classList.toggle('visible', Boolean(label));
+    }
+
+    window.addEventListener('jungle-workspace-change', () => ensureWorkspaceSessions());
+    sessionSelect?.addEventListener('change', () => switchSession(sessionSelect.value));
+    newSessionButton?.addEventListener('click', startNewSession);
+
+    function closeModelMenu() {
+        modelMenu?.classList.remove('show');
+        modelTrigger?.setAttribute('aria-expanded', 'false');
+    }
+
+    function renderModelPicker() {
+        if (!modelOptions || !modelTrigger) return;
+        const selected = [...model.options].find(option => option.value === model.value) || model.options[0];
+        modelTrigger.textContent = selected?.textContent || 'Select a model';
+        modelTrigger.disabled = model.disabled;
+        modelOptions.innerHTML = '';
+        const query = String(modelSearch?.value || '').trim().toLowerCase();
+        let visible = 0;
+        [...model.options].forEach(option => {
+            const matches = !query || option.textContent.toLowerCase().includes(query);
+            if (!matches) return;
+            visible += 1;
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'agent-model-option';
+            item.textContent = option.textContent;
+            item.setAttribute('role', 'option');
+            item.setAttribute('aria-selected', String(option.value === model.value));
+            item.disabled = option.disabled || !option.value || model.disabled;
+            item.addEventListener('click', event => {
+                event.stopPropagation();
+                if (item.disabled) return;
+                model.value = option.value;
+                model.dispatchEvent(new Event('change', { bubbles: true }));
+                closeModelMenu();
+            });
+            modelOptions.appendChild(item);
+        });
+        if (!visible) {
+            const empty = document.createElement('div');
+            empty.className = 'agent-model-empty';
+            empty.textContent = query ? 'No matching models' : 'No models available';
+            modelOptions.appendChild(empty);
+        }
+    }
+
+    modelTrigger?.addEventListener('click', event => {
+        event.stopPropagation();
+        if (model.disabled) return;
+        const open = !modelMenu.classList.contains('show');
+        if (open) {
+            renderModelPicker();
+            modelMenu.classList.add('show');
+            modelTrigger.setAttribute('aria-expanded', 'true');
+            setTimeout(() => modelSearch?.focus(), 0);
+        } else closeModelMenu();
+    });
+    modelSearch?.addEventListener('input', renderModelPicker);
+    modelSearch?.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); closeModelMenu(); modelTrigger?.focus(); } });
+    document.addEventListener('click', event => {
+        if (modelPicker && !modelPicker.contains(event.target)) closeModelMenu();
+    });
+    const modelObserver = new MutationObserver(renderModelPicker);
+    modelObserver.observe(model, { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'selected'] });
 
     function resetDetectedModels() {
         model.querySelectorAll('option[data-agent-discovered="true"], option[data-agent-default="true"], option[data-agent-info="true"]').forEach(option => option.remove());
@@ -84,6 +303,7 @@
             model.appendChild(option);
         }
         model.value = '';
+        renderModelPicker();
     }
 
     const setConnected = connected => {
@@ -95,6 +315,7 @@
         status.setAttribute('aria-expanded', 'false');
         model.disabled = !connected;
         if (!connected) resetDetectedModels();
+        renderModelPicker();
     };
     // Providers are identified from their documented key prefixes where one
     // exists. A key itself cannot identify an arbitrary provider, so unknown
@@ -150,6 +371,7 @@
     model.onchange = () => {
         modelManuallySelected = true;
         sessionStorage.setItem('jungle_agent_model', model.value);
+        renderModelPicker();
     };
 
     function selectDefaultModel(provider) {
@@ -159,6 +381,7 @@
             model.value = option.value;
             sessionStorage.setItem('jungle_agent_model', model.value);
         }
+        renderModelPicker();
     }
 
     function ensureProviderModel(provider) {
@@ -174,6 +397,7 @@
             option.dataset.agentProvider = provider;
             model.appendChild(option);
         }
+        renderModelPicker();
         return true;
     }
 
@@ -187,6 +411,7 @@
         option.dataset.agentInfo = 'true';
         model.appendChild(option);
         model.value = '';
+        renderModelPicker();
     }
 
     function addDiscoveredModels(provider, entries) {
@@ -210,6 +435,7 @@
             model.value = entries[0]?.value || model.querySelector('option[data-agent-default="true"]').value;
             sessionStorage.setItem('jungle_agent_model', model.value);
         }
+        renderModelPicker();
         return available;
     }
 
@@ -315,6 +541,7 @@
     if (apiKey) setTimeout(() => discoverModelsForKey(apiKey, false), 0);
 
     toggle.onclick = () => {
+        ensureWorkspaceSessions();
         panel.classList.toggle('open');
         toggle.classList.toggle('active', panel.classList.contains('open'));
         if (panel.classList.contains('open') && apiKey) setTimeout(() => input.focus(), 30);
@@ -383,13 +610,14 @@
         resizeHandle.addEventListener('pointermove', move); resizeHandle.addEventListener('pointerup', stop);
     });
 
-    function addMessage(role, text) {
+    function addMessage(role, text, { persist = true } = {}) {
         messages.querySelector('.agent-empty')?.remove();
         const node = document.createElement('div');
         node.className = 'agent-message ' + role;
         node.textContent = String(text || '');
         messages.appendChild(node);
         messages.scrollTop = messages.scrollHeight;
+        if (persist) storeSessionMessage(role, text);
     }
 
     function projectSnapshot() {
@@ -606,7 +834,9 @@
             try { args = JSON.parse(call.function?.arguments || '{}'); } catch (_) {}
             parts.push({ functionCall: { id: call.id, name: call.function?.name, args } });
         });
-        return { role: 'model', parts };
+        const result = { role: 'model', parts };
+        Object.defineProperty(result, '__jungleUsage', { value: data.usage || {}, enumerable: false });
+        return result;
     }
 
     function anthropicMessages(contents) {
@@ -655,7 +885,9 @@
             if (item.type === 'tool_use') parts.push({ functionCall: { id: item.id, name: item.name, args: item.input || {} } });
         });
         if (!parts.length) throw new Error('Anthropic returned no response.');
-        return { role: 'model', parts };
+        const result = { role: 'model', parts };
+        Object.defineProperty(result, '__jungleUsage', { value: data.usage || {}, enumerable: false });
+        return result;
     }
 
     async function callModel(contents) {
@@ -682,7 +914,20 @@
         }
         const content = data.candidates?.[0]?.content;
         if (!content) throw new Error(data.promptFeedback?.blockReason || 'Gemini returned no response.');
-        return content;
+        const result = { ...content };
+        Object.defineProperty(result, '__jungleUsage', { value: data.usageMetadata || data.usage || {}, enumerable: false });
+        return result;
+    }
+
+    function estimateTokens(value) { return Math.max(0, Math.ceil(String(value || '').length / 4)); }
+
+    function tokensFromUsage(usage, fallback = '') {
+        const source = usage && typeof usage === 'object' ? usage : {};
+        const direct = Number(source.total_tokens ?? source.totalTokenCount ?? source.totalTokens ?? source.token_count);
+        if (Number.isFinite(direct) && direct > 0) return direct;
+        const input = Number(source.prompt_tokens ?? source.input_tokens ?? source.promptTokenCount ?? source.inputTokenCount) || 0;
+        const output = Number(source.completion_tokens ?? source.output_tokens ?? source.candidatesTokenCount ?? source.outputTokenCount) || 0;
+        return input + output || estimateTokens(fallback);
     }
 
     async function submit() {
@@ -698,23 +943,30 @@
             addMessage('system', 'This API key provider is not identifiable from the key alone. Enter its OpenAI-compatible API endpoint or select a compatible model before chatting.');
             return;
         }
-        busy = true; input.value = ''; input.disabled = send.disabled = true; status.textContent = 'Working';
+        busy = true; totalTokens = 0; input.value = ''; input.disabled = send.disabled = true; newSessionButton.disabled = sessionSelect.disabled = true; model.disabled = true; renderModelPicker(); setActivity('Thinking', totalTokens);
         addMessage('user', prompt);
         const contents = conversation.slice(-12).map(item => ({ role: item.role, parts: [{ text: item.text }] }));
         contents.push({ role: 'user', parts: [{ text: `${prompt}\n\nCURRENT PROJECT SNAPSHOT:\n${projectSnapshot()}` }] });
         try {
             let finalText = '';
             for (let round = 0; round < 12; round++) {
+                setActivity('Thinking', totalTokens);
                 const content = await callModel(contents);
+                const responseText = (content.parts || []).filter(part => part.text).map(part => part.text).join('\n');
+                totalTokens += tokensFromUsage(content.__jungleUsage, responseText);
+                setActivity('Thinking', totalTokens);
                 contents.push(content);
                 const calls = (content.parts || []).filter(part => part.functionCall).map(part => part.functionCall);
                 const text = (content.parts || []).filter(part => part.text).map(part => part.text).join('\n').trim();
                 if (text) finalText = text;
                 if (!calls.length) break;
                 const responses = [];
+                setActivity('Working', totalTokens);
                 for (const call of calls) {
                     try {
                         const result = await runTool(call.name, call.args || {});
+                        totalTokens += estimateTokens(result);
+                        setActivity('Working', totalTokens);
                         addMessage('system', result);
                         responses.push({ functionResponse: { name: call.name, id: call.id, response: { result } } });
                     } catch (error) {
@@ -729,7 +981,7 @@
         } catch (error) {
             addMessage('system', 'Agent error: ' + error.message);
         } finally {
-            busy = false; input.disabled = send.disabled = false; setConnected(Boolean(apiKey)); input.focus();
+            busy = false; setActivity(); input.disabled = send.disabled = false; newSessionButton.disabled = sessionSelect.disabled = false; setConnected(Boolean(apiKey)); input.focus();
         }
     }
 

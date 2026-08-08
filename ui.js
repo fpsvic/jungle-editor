@@ -120,6 +120,7 @@ class JungleUI {
         currentProjectId = id;
         const p = this.getCurrentProject();
         if (!p) return;
+        window.dispatchEvent(new CustomEvent('jungle-workspace-change', { detail: { projectId: p.id } }));
         // Enter the workspace before rendering its contents so creation always
         // transitions away from the project dashboard immediately.
         projectsDashboard.classList.remove('show');

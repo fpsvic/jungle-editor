@@ -224,6 +224,40 @@
         </div>
         <div id="lang-picker-grid"></div>
     </div>
+    <main id="publish-screen" class="publish-screen" aria-labelledby="publish-title">
+        <header class="publish-header">
+            <button id="publish-back-btn" type="button">Back</button>
+            <span id="publish-header-title">Publish Project</span>
+        </header>
+        <div class="publish-body">
+            <section class="publish-card">
+                <p class="publish-kicker">SHARE YOUR WORKSPACE</p>
+                <h1 id="publish-title">Publish your project</h1>
+                <p class="publish-description">Choose the address for this project and decide whether its published page is visible to everyone.</p>
+                <div class="publish-project-current">
+                    <span class="publish-label">Current project</span>
+                    <strong id="publish-current-project">No project open</strong>
+                </div>
+                <label class="publish-label" for="publish-name-input">Published name</label>
+                <div class="publish-name-row">
+                    <input id="publish-name-input" type="text" autocomplete="off" spellcheck="false" placeholder="my-project" maxlength="63">
+                    <span class="publish-domain-suffix">.jungle.app</span>
+                </div>
+                <p id="publish-name-help" class="publish-help">Use letters, numbers, and hyphens. Spaces are converted to hyphens.</p>
+                <label class="publish-visibility-row" for="publish-public-toggle">
+                    <input id="publish-public-toggle" type="checkbox">
+                    <span><strong>Make this project public</strong><small>Anyone with the published address can open it.</small></span>
+                </label>
+                <div id="publish-private-note" class="publish-private-note">Private projects are only available to your account when cloud publishing is connected.</div>
+                <button id="publish-project-btn" class="publish-submit-btn" type="button">Publish</button>
+                <div id="publish-result" class="publish-result" aria-live="polite" hidden>
+                    <span class="publish-result-label">Published address</span>
+                    <div class="publish-result-row"><a id="publish-result-link" target="_blank" rel="noopener noreferrer"></a><button id="publish-copy-btn" type="button">Copy link</button></div>
+                    <p id="publish-result-note" class="publish-help"></p>
+                </div>
+            </section>
+        </div>
+    </main>
     <div id="toast-container"></div>
     <div class="workspace-container" id="workspace-container" style="display: none;">
         <div class="sidebar">
@@ -271,6 +305,7 @@
                         <div class="tools-menu" id="tools-menu"><button id="find-bugs-tool" type="button">Find Bugs <span>›</span></button><button id="debug-tool" type="button">Debug</button><button id="multilang-tool" type="button">Multi-language Extension <span>›</span></button></div>
                         <div class="bug-language-menu" id="bug-language-menu" aria-label="Choose a language for bug scanning"></div>
                     </div><button id="split-editor-btn" type="button" title="Toggle stacked editor" aria-label="Toggle stacked editor" aria-pressed="false">↕</button>
+                    <button id="publish-project-header-btn" type="button" title="Publish project" aria-label="Publish project"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg></button>
                 </div>
                 <div class="header-right flex items-center gap-2">
                     <button class="template-text-btn" id="template-panel-toggle" title="Show starter templates">Templates</button>
