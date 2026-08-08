@@ -241,7 +241,7 @@
                 <label class="publish-label" for="publish-name-input">Published name</label>
                 <div class="publish-name-row">
                     <input id="publish-name-input" type="text" autocomplete="off" spellcheck="false" placeholder="my-project" maxlength="63">
-                    <span class="publish-domain-suffix">.jungle.app</span>
+                    <span class="publish-domain-suffix">.jungle.net</span>
                 </div>
                 <p id="publish-name-help" class="publish-help">Use letters, numbers, and hyphens. Spaces are converted to hyphens.</p>
                 <label class="publish-visibility-row" for="publish-public-toggle">

@@ -5,6 +5,8 @@
 // deployed editor and carries a compact URL snapshot. A static GitHub Pages
 // site cannot reserve subdomains or provide durable storage by itself.
 (function initJunglePublishing() {
+    const publishDomain = 'jungle.net';
+    const publishDomainSuffix = `.${publishDomain}`;
     const screen = document.getElementById('publish-screen');
     const openButton = document.getElementById('publish-project-header-btn');
     const backButton = document.getElementById('publish-back-btn');
@@ -84,9 +86,9 @@
         const current = window.location.href.split('#')[0];
         try {
             const currentUrl = new URL(current, window.location.href);
-            // jungle.app currently serves Jungle Commerce. Never send a
-            // snapshot there unless a real publisher endpoint supplied the
-            // URL, otherwise the snapshot is swallowed by the Commerce login.
+            // The old jungle.app host currently serves Jungle Commerce. Never
+            // send a snapshot there unless a real publisher endpoint supplied
+            // the URL, otherwise the snapshot is swallowed by the login page.
             if (currentUrl.hostname === 'jungle.app' || currentUrl.hostname.endsWith('.jungle.app')) {
                 return 'https://fpsvic.github.io/jungle-editor/';
             }
@@ -101,15 +103,15 @@
     function updateNamePreview() {
         const slug = slugify(nameInput.value);
         const hasPublisher = Boolean(publisherEndpoint());
-        if (domainSuffix) domainSuffix.textContent = hasPublisher ? '.jungle.app' : 'share link';
+        if (domainSuffix) domainSuffix.textContent = hasPublisher ? publishDomainSuffix : 'share link';
         if (!slug) {
             nameHelp.textContent = 'Use letters, numbers, and hyphens. Spaces are converted to hyphens.';
         } else if (isReservedSlug(slug)) {
-            nameHelp.textContent = `${slug}.jungle.app is reserved. Choose another name.`;
+            nameHelp.textContent = `${slug}${publishDomainSuffix} is reserved. Choose another name.`;
         } else if (!hasPublisher) {
             nameHelp.textContent = 'The project name is saved in the share link. It will open directly in Jungle Editor.';
         } else {
-            nameHelp.textContent = `Your address will be https://${slug}.jungle.app`;
+            nameHelp.textContent = `Your address will be https://${slug}${publishDomainSuffix}`;
         }
         privateNote.hidden = publicToggle.checked;
     }
@@ -150,14 +152,14 @@
             let data = null;
             try { data = await response.json(); } catch (_) {}
             if (!response.ok) throw new Error(data?.message || `Publisher returned ${response.status}.`);
-            const url = String(data?.url || data?.publicUrl || `https://${snapshot.slug}.jungle.app`);
+            const url = String(data?.url || data?.publicUrl || `https://${snapshot.slug}${publishDomainSuffix}`);
             return { url, note: snapshot.visibility === 'public' ? 'This project is public.' : 'This project is private to your account.' };
         }
         const url = fallbackLink(snapshot.slug, snapshot);
         return {
             url,
             note: snapshot.visibility === 'public'
-                ? 'Share link prepared. It opens in Jungle Editor; connect a publisher API for a durable custom .jungle.app address.'
+                ? `Share link prepared. It opens in Jungle Editor; connect a publisher API for a durable custom ${publishDomainSuffix} address.`
                 : 'Private link prepared as an unlisted snapshot. Connect a publisher API for account-only access control and durable hosting.',
         };
     }
@@ -167,7 +169,7 @@
         if (!project) { JungleUI.showToast('Open a project before publishing it.'); return; }
         const slug = slugify(nameInput.value);
         if (slug.length < 2) { nameHelp.textContent = 'Choose a name with at least two letters or numbers.'; nameInput.focus(); return; }
-        if (isReservedSlug(slug)) { nameHelp.textContent = `${slug}.jungle.app is reserved. Choose another name.`; nameInput.focus(); return; }
+        if (isReservedSlug(slug)) { nameHelp.textContent = `${slug}${publishDomainSuffix} is reserved. Choose another name.`; nameInput.focus(); return; }
         const snapshot = projectSnapshot(project, slug, publicToggle.checked);
         publishButton.disabled = true;
         publishButton.textContent = 'Publishing...';
