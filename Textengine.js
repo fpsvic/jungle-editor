@@ -1,10 +1,119 @@
-// Jungle TextEngine: a language-aware editing layer over the native textarea.
-// The textarea remains the editing surface, while this class supplies the
-// model, transactions, navigation, completion, and editor components that a
-// larger text editor normally owns.
+// Jungle TextEngine: a language-aware editing layer over a custom contenteditable
+// code surface. The adapter below keeps the familiar value/selection API used
+// by the rest of Jungle Editor without making a textarea the editing surface.
+function installJungleCodeAreaAdapter(element) {
+    if (!element || element.__jungleCodeAreaAdapterInstalled) return element;
+    element.__jungleCodeAreaAdapterInstalled = true;
+    element.__jungleSelection = { start: 0, end: 0 };
+
+    const normalize = value => String(value ?? '').replace(/\r\n?/g, '\n');
+    const textContent = () => {
+        // Enter/Tab are handled by the text engine, so normal editing remains
+        // a plain text node. innerText also covers browser-generated block
+        // nodes from IME input or an external paste.
+        const text = element.innerText !== undefined ? element.innerText : element.textContent;
+        return normalize(text || '');
+    };
+    const textNodes = () => {
+        const nodes = [];
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        let node;
+        while ((node = walker.nextNode())) nodes.push(node);
+        return nodes;
+    };
+    const offsetFromPoint = (container, offset) => {
+        const nodes = textNodes();
+        if (container.nodeType === Node.TEXT_NODE) {
+            let total = 0;
+            for (const node of nodes) {
+                if (node === container) return total + Math.min(offset, node.textContent.length);
+                total += node.textContent.length;
+            }
+        }
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        try {
+            range.setEnd(container, offset);
+            return normalize(range.toString()).length;
+        } catch (_) { return 0; }
+    };
+    const selectionOffsets = () => {
+        const selection = window.getSelection?.();
+        if (!selection || !selection.rangeCount || !element.contains(selection.anchorNode)) return { ...element.__jungleSelection };
+        const range = selection.getRangeAt(0);
+        return {
+            start: offsetFromPoint(range.startContainer, range.startOffset),
+            end: offsetFromPoint(range.endContainer, range.endOffset),
+        };
+    };
+    const pointAtOffset = offset => {
+        const target = Math.max(0, Math.min(Number(offset) || 0, textContent().length));
+        const nodes = textNodes();
+        let total = 0;
+        for (const node of nodes) {
+            const next = total + node.textContent.length;
+            if (target <= next) return { node, offset: target - total };
+            total = next;
+        }
+        if (nodes.length) return { node: nodes[nodes.length - 1], offset: nodes[nodes.length - 1].textContent.length };
+        return { node: element, offset: 0 };
+    };
+    const setOffsets = (start, end = start) => {
+        const value = textContent();
+        const safeStart = Math.max(0, Math.min(Number(start) || 0, value.length));
+        const safeEnd = Math.max(safeStart, Math.min(Number(end) || 0, value.length));
+        element.__jungleSelection = { start: safeStart, end: safeEnd };
+        const selection = window.getSelection?.();
+        if (!selection) return;
+        const range = document.createRange();
+        const begin = pointAtOffset(safeStart);
+        const finish = pointAtOffset(safeEnd);
+        try {
+            range.setStart(begin.node, begin.offset);
+            range.setEnd(finish.node, finish.offset);
+            selection.removeAllRanges();
+            selection.addRange(range);
+        } catch (_) {}
+    };
+
+    Object.defineProperty(element, 'value', {
+        configurable: true,
+        get: textContent,
+        set(value) {
+            const next = normalize(value);
+            element.textContent = next;
+            element.__jungleSelection = { start: 0, end: 0 };
+        },
+    });
+    Object.defineProperty(element, 'selectionStart', {
+        configurable: true,
+        get() { return selectionOffsets().start; },
+        set(value) {
+            const current = selectionOffsets();
+            const start = Math.max(0, Math.min(Number(value) || 0, textContent().length));
+            setOffsets(start, Math.max(start, current.end));
+        },
+    });
+    Object.defineProperty(element, 'selectionEnd', {
+        configurable: true,
+        get() { return selectionOffsets().end; },
+        set(value) {
+            const current = selectionOffsets();
+            setOffsets(current.start, Math.max(current.start, Number(value) || 0));
+        },
+    });
+    element.setSelectionRange = (start, end = start) => setOffsets(start, end);
+    element.select = () => { element.focus(); setOffsets(0, textContent().length); };
+    element.__jungleGetSelection = selectionOffsets;
+    element.__jungleSetSelection = setOffsets;
+    element.__jungleTextContent = textContent;
+    return element;
+}
+
 class JungleTextEngine {
     constructor(textarea, options = {}) {
-        if (!textarea) throw new Error('JungleTextEngine needs a textarea.');
+        if (!textarea) throw new Error('JungleTextEngine needs a code surface.');
+        installJungleCodeAreaAdapter(textarea);
         this.el = textarea;
         this.indent = options.indent || '    ';
         this.historyLimit = Math.max(50, Number(options.historyLimit) || 500);

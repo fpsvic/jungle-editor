@@ -183,8 +183,10 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .editor-wrapper { display: flex; flex: 1; min-width: 0; position: relative; overflow: hidden; background-color: #0b0d10; }
 #line-gutter { padding: 20px 10px 20px 15px; background-color: #080a0d; color: #35453e; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; text-align: right; user-select: none; border-right: 1px solid #1c2321; min-width: 45px; white-space: pre; overflow: hidden; box-sizing: border-box; }
 #editor-container { position: relative; flex: 1; height: 100%; overflow: hidden; }
+#current-line-highlight { position: absolute; top: 20px; left: 0; right: 0; height: 22px; box-sizing: border-box; background: rgba(116,168,150,.09); border-left: 2px solid rgba(116,168,150,.38); pointer-events: none; z-index: 0; }
 #highlight-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: 20px; box-sizing: border-box; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; white-space: pre; overflow: hidden; pointer-events: none; color: #d1d5db; background: transparent; z-index: 1; tab-size: 4; word-wrap: normal; }
-#code-editor { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: 20px; box-sizing: border-box; background: transparent; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: #74a896; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; border: none; resize: none; outline: none; tab-size: 4; overflow-y: auto; overflow-x: auto; white-space: pre; z-index: 2; word-wrap: normal; }
+#code-editor { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: 20px; box-sizing: border-box; background: transparent; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: #74a896; font-family: 'Fira Code', 'Consolas', monospace; font-size: 14px; line-height: 22px; border: none; outline: none; tab-size: 4; overflow-y: auto; overflow-x: auto; white-space: pre; z-index: 2; word-wrap: normal; user-select: text; cursor: text; }
+#code-editor::selection { background: rgba(116,168,150,.28); }
 #code-editor::-webkit-scrollbar { width: 10px; height: 10px; }
 #code-editor::-webkit-scrollbar-track { background: #080a0d; }
 #code-editor::-webkit-scrollbar-thumb { background: #1c2522; border: 2px solid #080a0d; border-radius: 5px; }
@@ -444,6 +446,7 @@ body.theme-light .file-list li.active { background:#ddd; color:#000; border-colo
 body.theme-light .editor-header h2, body.theme-light #loc-display { color:#222; }
 body.theme-light #line-gutter { background:#eee; color:#777; border-color:#ccc; }
 body.theme-light #editor-container, body.theme-light #highlight-overlay { background:#fff; color:#222; }
+body.theme-light #current-line-highlight { background:rgba(35,105,75,.09); border-left-color:rgba(35,105,75,.35); }
 body.theme-light #code-editor { caret-color:#000; }
 body.theme-light #code-editor::selection, body.theme-light .pv-textarea::selection { background:rgba(0,0,0,.18); }
 body.theme-light #terminal-view-container, body.theme-light #console-view-container, body.theme-light #terminal-view-body, body.theme-light #console-view-body { background:#fff!important; color:#111!important; border-color:#ccc!important; }

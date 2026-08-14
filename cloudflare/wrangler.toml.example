@@ -1,0 +1,19 @@
+name = "jungle-editor"
+compatibility_date = "2026-08-09"
+pages_build_output_dir = "."
+
+# Replace these placeholders with the IDs from your Cloudflare account.
+[[kv_namespaces]]
+binding = "JUNGLE_PROJECTS"
+id = "replace-with-projects-kv-id"
+preview_id = "replace-with-projects-preview-id"
+
+[[kv_namespaces]]
+binding = "JUNGLE_USERS"
+id = "replace-with-users-kv-id"
+preview_id = "replace-with-users-preview-id"
+
+[[kv_namespaces]]
+binding = "JUNGLE_SESSIONS"
+id = "replace-with-sessions-kv-id"
+preview_id = "replace-with-sessions-preview-id"

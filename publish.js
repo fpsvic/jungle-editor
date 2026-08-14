@@ -7,6 +7,8 @@
 (function initJunglePublishing() {
     const publishDomain = 'jungle.net';
     const publishDomainSuffix = `.${publishDomain}`;
+    const hostableExtensions = new Set(['.html', '.htm', '.css', '.js', '.mjs', '.cjs']);
+    const hostableLanguages = new Set(['html', 'css', 'javascript', 'js']);
     const screen = document.getElementById('publish-screen');
     const openButton = document.getElementById('publish-project-header-btn');
     const backButton = document.getElementById('publish-back-btn');
@@ -15,6 +17,7 @@
     const publicToggle = document.getElementById('publish-public-toggle');
     const currentProjectLabel = document.getElementById('publish-current-project');
     const nameHelp = document.getElementById('publish-name-help');
+    const hostingWarning = document.getElementById('publish-hosting-warning');
     const privateNote = document.getElementById('publish-private-note');
     const publishButton = document.getElementById('publish-project-btn');
     const result = document.getElementById('publish-result');
@@ -54,6 +57,19 @@
             files: Object.fromEntries(Object.entries(project.files || {}).map(([file, code]) => [file, String(code ?? '')])),
             publishedAt: new Date().toISOString(),
         };
+    }
+
+    function hostingIssue(project) {
+        const files = Object.keys(project?.files || {});
+        const unsupportedFiles = files.filter(file => {
+            const dot = file.lastIndexOf('.');
+            return dot > -1 && !hostableExtensions.has(file.slice(dot).toLowerCase());
+        });
+        const language = String(project?.lang || '').trim().toLowerCase();
+        if (language && !hostableLanguages.has(language)) return `${project.lang} projects cannot be hosted yet.`;
+        if (unsupportedFiles.length) return `This project includes ${unsupportedFiles[0]}, which is not an HTML, CSS, or JavaScript file.`;
+        if (!files.length) return 'Add at least one HTML, CSS, or JavaScript file before publishing.';
+        return '';
     }
 
     function encodeSnapshot(snapshot) {
@@ -97,7 +113,10 @@
     }
 
     function publisherEndpoint() {
-        return String(window.JUNGLE_PUBLISH_API || document.querySelector('meta[name="jungle-publish-api"]')?.content || '').trim();
+        const configured = String(window.JUNGLE_PUBLISH_API || document.querySelector('meta[name="jungle-publish-api"]')?.content || '').trim();
+        if (configured) return configured;
+        const host = window.location.hostname || '';
+        return host === publishDomain || host.endsWith(publishDomainSuffix) ? '/api/publish' : '';
     }
 
     function updateNamePreview() {
@@ -130,6 +149,7 @@
         resultLink.removeAttribute('href');
         resultLink.textContent = '';
         resultNote.textContent = '';
+        if (hostingWarning) hostingWarning.hidden = true;
         updateNamePreview();
         document.querySelector('.tools-menu')?.classList.remove('show');
         screen.classList.add('visible');
@@ -144,9 +164,12 @@
     async function publishSnapshot(snapshot) {
         const endpoint = publisherEndpoint();
         if (endpoint) {
+            const authToken = sessionStorage.getItem('jungle_auth_token') || '';
+            const headers = { 'Content-Type': 'application/json' };
+            if (authToken) headers.Authorization = `Bearer ${authToken}`;
             const response = await fetch(endpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers,
                 body: JSON.stringify(snapshot),
             });
             let data = null;
@@ -170,6 +193,14 @@
         const slug = slugify(nameInput.value);
         if (slug.length < 2) { nameHelp.textContent = 'Choose a name with at least two letters or numbers.'; nameInput.focus(); return; }
         if (isReservedSlug(slug)) { nameHelp.textContent = `${slug}${publishDomainSuffix} is reserved. Choose another name.`; nameInput.focus(); return; }
+        const issue = hostingIssue(project);
+        if (issue) {
+            if (hostingWarning) { hostingWarning.textContent = `${issue} Jungle hosting currently supports HTML, CSS, and JavaScript only.`; hostingWarning.hidden = false; }
+            result.hidden = true;
+            JungleUI.showToast('This project cannot be hosted yet', 'error');
+            return;
+        }
+        if (hostingWarning) hostingWarning.hidden = true;
         const snapshot = projectSnapshot(project, slug, publicToggle.checked);
         publishButton.disabled = true;
         publishButton.textContent = 'Publishing...';
@@ -209,11 +240,8 @@
         }
     }
 
-    function openSnapshotFromHash() {
-        const marker = '#jungle-project=';
-        if (!window.location.hash.startsWith(marker)) return;
-        const snapshot = decodeSnapshot(window.location.hash.slice(marker.length));
-        if (!snapshot || !snapshot.files || !Object.keys(snapshot.files).length) return;
+    function openPublishedSnapshot(snapshot) {
+        if (!snapshot || !snapshot.files || !Object.keys(snapshot.files).length) return false;
         const files = snapshot.files;
         const firstFile = Object.keys(files)[0];
         const sharedId = `published_${snapshot.slug || 'project'}_${Date.now()}`;
@@ -223,6 +251,28 @@
         projectsDashboard.classList.remove('show');
         window.history.replaceState(null, '', window.location.pathname + window.location.search);
         JungleUI.showToast('Opened published project snapshot', 'success');
+        return true;
+    }
+
+    function openSnapshotFromHash() {
+        const marker = '#jungle-project=';
+        if (!window.location.hash.startsWith(marker)) return false;
+        return openPublishedSnapshot(decodeSnapshot(window.location.hash.slice(marker.length)));
+    }
+
+    async function openSnapshotFromCloudHost() {
+        const host = String(window.location.hostname || '').toLowerCase();
+        if (!host.endsWith(publishDomainSuffix) || host === publishDomain || host === `www${publishDomainSuffix}`) return false;
+        const slug = host.slice(0, -publishDomainSuffix.length).replace(/\.$/, '');
+        if (!slug || slug.includes('.')) return false;
+        try {
+            const headers = { Accept: 'application/json' };
+            const authToken = sessionStorage.getItem('jungle_auth_token') || '';
+            if (authToken) headers.Authorization = `Bearer ${authToken}`;
+            const response = await fetch(`/api/project/${encodeURIComponent(slug)}`, { headers });
+            if (!response.ok) return false;
+            return openPublishedSnapshot(await response.json());
+        } catch (_) { return false; }
     }
 
     openButton.onclick = event => { event.preventDefault(); openPublish(); };
@@ -237,6 +287,8 @@
             if (project) { currentProjectLabel.textContent = project.name || 'Untitled project'; nameInput.value = slugify(project.name) || 'my-project'; updateNamePreview(); }
         }
     });
-    window.addEventListener('load', () => setTimeout(openSnapshotFromHash, 0));
+    window.addEventListener('load', () => setTimeout(async () => {
+        if (!openSnapshotFromHash()) await openSnapshotFromCloudHost();
+    }, 0));
     window.JunglePublish = { open: openPublish, close: closePublish, slugify, decodeSnapshot };
 })();

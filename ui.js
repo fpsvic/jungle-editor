@@ -582,6 +582,19 @@ class JungleUI {
         }
         highlightOverlay.innerHTML = finalize(escaped);
         this.updateLineNumbers();
+        this.updateCurrentLineHighlight();
+    }
+    static updateCurrentLineHighlight() {
+        const marker = document.getElementById('current-line-highlight');
+        if (!marker || !editor) return;
+        const code = String(editor.value || '');
+        const offset = Number(editor.selectionStart) || 0;
+        const line = Math.max(1, code.slice(0, Math.min(offset, code.length)).split('\n').length);
+        const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 22;
+        const paddingTop = parseFloat(getComputedStyle(editor).paddingTop) || 20;
+        marker.style.height = `${lineHeight}px`;
+        marker.style.top = `${paddingTop + ((line - 1) * lineHeight) - (editor.scrollTop || 0)}px`;
+        marker.dataset.line = String(line);
     }
     // Returns syntax-highlighted HTML for arbitrary lang+code (used by Whole Project view)
     static highlightCode(lang, code) {

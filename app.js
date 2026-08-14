@@ -38,6 +38,7 @@ var consoleViewContainer = document.getElementById('console-view-container');
 var projectViewContainer = document.getElementById('project-view-container');
 var consoleViewBody = document.getElementById('console-view-body');
 var consoleStatus = document.getElementById('console-status');
+installJungleCodeAreaAdapter(editor);
 var jungleTextEngine = new JungleTextEngine(editor);
 var runFullscreenButton = document.createElement('button');
 runFullscreenButton.id = 'run-fullscreen-btn';
@@ -1125,7 +1126,15 @@ async function runLiveAnalysis() {
     // Update the console panel content + badge in place (don't switch the active view).
     showConsoleIssues(issues, p.currentFile);
 }
-editor.onscroll = () => { highlightOverlay.scrollTop = lineGutter.scrollTop = editor.scrollTop; highlightOverlay.scrollLeft = editor.scrollLeft; };
+editor.onscroll = () => {
+    highlightOverlay.scrollTop = lineGutter.scrollTop = editor.scrollTop;
+    highlightOverlay.scrollLeft = editor.scrollLeft;
+    JungleUI.updateCurrentLineHighlight?.();
+};
+['click', 'keyup', 'mouseup', 'focus'].forEach(type => editor.addEventListener(type, () => JungleUI.updateCurrentLineHighlight?.()));
+document.addEventListener('selectionchange', () => {
+    if (document.activeElement === editor || editor.contains(document.getSelection?.()?.anchorNode)) JungleUI.updateCurrentLineHighlight?.();
+});
 editor.onkeydown = (e) => {
     if (e.key === 'Tab') {
         e.preventDefault();

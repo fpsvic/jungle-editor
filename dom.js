@@ -2,7 +2,11 @@
 (function buildDOM() {
     document.body.innerHTML = `
     <div class="splash-screen" id="splash-screen">
-        <button class="splash-blog-link" id="open-blog-btn" type="button">Blog</button>
+        <nav class="landing-nav" aria-label="Jungle Editor navigation">
+            <button class="landing-nav-link" id="open-blog-btn" type="button">Blog</button>
+            <button class="landing-auth-link" id="open-login-btn" type="button">Log in</button>
+            <button class="landing-auth-primary" id="open-signup-btn" type="button">Sign up</button>
+        </nav>
         <div class="splash-content">
             <svg class="splash-logo" width="110" height="110" viewBox="0 0 100 100" fill="none" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
                 <defs>
@@ -23,7 +27,10 @@
                 <line x1="50" y1="20" x2="50" y2="80" stroke="#e2f1ec" stroke-width="2.5" stroke-linecap="round" />
             </svg>
             <h1 class="splash-title">Jungle Editor</h1>
-            <p class="splash-subtitle">An elegant multi-language coding sandbox environment configured within a soothing, distraction-free forest mist design.</p>
+            <p class="splash-subtitle">A calm place to build, test, debug, and share small projects without setting up a full development environment.</p>
+            <div class="landing-proof" aria-label="Jungle Editor capabilities">
+                <span>Code in the browser</span><span>Run and preview</span><span>Share web projects</span>
+            </div>
             <button class="enter-btn" id="enter-btn">Enter Workspace</button>
             <button class="settings-icon-btn" id="open-settings-btn" title="Settings">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -44,6 +51,31 @@
             <section><h2>More than a text box</h2><p>The editor includes familiar tools such as search and replace, undo and redo, code highlighting, starter templates, a preview for web projects, and a terminal-inspired workspace. Its scanners are designed to explain likely problems in plain language, while real runtimes and compilers can verify runnable code when available.</p></section>
             <section><h2>Where it fits</h2><p>It is best for learning, prototypes, coding exercises, and focused debugging. Larger production applications still benefit from their normal compiler, test suite, package tooling, and CI checks—but Jungle Editor remains a useful place to isolate an issue and understand it quickly.</p></section>
         </article>
+        <nav class="blog-nav" aria-label="Jungle Editor topics">
+            <span class="blog-nav-label">Explore</span>
+            <button class="blog-tab active" data-blog-tab="overview" type="button">Overview</button>
+            <button class="blog-tab" data-blog-tab="editor" type="button">The workspace</button>
+            <button class="blog-tab" data-blog-tab="runtimes" type="button">Runtimes</button>
+            <button class="blog-tab" data-blog-tab="scanners" type="button">Scanners</button>
+            <button class="blog-tab" data-blog-tab="agents" type="button">Agents</button>
+            <button class="blog-tab" data-blog-tab="publishing" type="button">Publishing</button>
+            <button class="blog-tab" data-blog-tab="roadmap" type="button">Roadmap</button>
+        </nav>
+    </main>
+    <main class="auth-screen" id="auth-screen" aria-labelledby="auth-title">
+        <header class="auth-header"><button id="auth-back-btn" type="button">&larr; Back</button><span>Jungle Editor Accounts</span></header>
+        <div class="auth-body">
+            <div class="auth-intro"><p class="blog-kicker">YOUR WORKSPACE, ANYWHERE</p><h1>Keep your projects close.</h1><p>Sign in to sync projects, chat sessions, and private published links when the Jungle cloud service is connected.</p></div>
+            <section class="auth-card">
+                <div id="auth-form-view">
+                    <p class="auth-kicker" id="auth-mode-kicker">WELCOME BACK</p><h2 id="auth-title">Log in to Jungle Editor</h2><p class="auth-description" id="auth-mode-description">Use your email and password to continue.</p>
+                    <form id="auth-form" novalidate><label for="auth-email">Email address</label><input id="auth-email" type="email" autocomplete="email" required placeholder="you@example.com"><label for="auth-password">Password</label><input id="auth-password" type="password" autocomplete="current-password" required placeholder="Your password"><button class="auth-submit" id="auth-submit-btn" type="submit">Log in</button></form>
+                    <div class="auth-divider"><span>or</span></div><button class="google-auth-btn" id="google-auth-btn" type="button"><span class="google-mark">G</span> Continue with Google</button>
+                    <p class="auth-switch" id="auth-switch-text">Don't have an account? <button id="auth-switch-btn" type="button">Sign up</button></p><p class="auth-status" id="auth-status" aria-live="polite"></p>
+                </div>
+                <div class="auth-google-picker hidden" id="auth-google-picker"><p class="auth-kicker">GOOGLE SIGN-IN</p><h2>Choose an account</h2><p class="auth-description">Select a Google account to continue to Jungle Editor.</p><div id="auth-account-list" class="auth-account-list"></div><button class="auth-secondary" id="auth-google-other" type="button">Use another account</button><button class="auth-text-btn" id="auth-google-back" type="button">Back to email sign in</button></div>
+            </section>
+        </div>
     </main>
     <div id="settings-screen">
         <div id="settings-header">
@@ -244,6 +276,7 @@
                     <span class="publish-domain-suffix">.jungle.net</span>
                 </div>
                 <p id="publish-name-help" class="publish-help">Use letters, numbers, and hyphens. Spaces are converted to hyphens.</p>
+                <div id="publish-hosting-warning" class="publish-hosting-warning" hidden>Jungle hosting currently supports HTML, CSS, and JavaScript projects only. Other languages can still be shared as source files.</div>
                 <label class="publish-visibility-row" for="publish-public-toggle">
                     <input id="publish-public-toggle" type="checkbox">
                     <span><strong>Make this project public</strong><small>Anyone with the published address can open it.</small></span>
@@ -339,8 +372,9 @@
             <div class="editor-wrapper" id="editor-wrapper">
                 <div id="line-gutter">1</div>
                 <div id="editor-container">
+                    <div id="current-line-highlight" aria-hidden="true"></div>
                     <pre id="highlight-overlay"></pre>
-                    <textarea id="code-editor" spellcheck="false"></textarea>
+                    <div id="code-editor" class="code-editor-surface" contenteditable="true" role="textbox" aria-multiline="true" spellcheck="false" tabindex="0"></div>
                     <div style="position:absolute;top:12px;right:30px;z-index:10;display:flex;gap:14px;align-items:center;">
                         <span id="select-all-code-btn" title="Select All Code" style="color:#aed9cb;font-size:0.78rem;cursor:pointer;">☰ Select All</span>
                         <span id="header-copy-code-btn" title="Copy Current File Contents to Clipboard" style="color:#aed9cb;font-size:0.78rem;cursor:pointer;">📋 Copy Code</span>
