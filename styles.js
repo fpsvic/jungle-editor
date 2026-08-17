@@ -182,9 +182,9 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .lang-picker-more:hover { background: #2b5143; border-color: #74a896; color: #fff; transform: translateY(-1px); }
 .editor-wrapper { --editor-font: 'Fira Code', 'Consolas', monospace; --editor-font-size: 14px; --editor-line-height: 22px; --editor-padding-y: 20px; --editor-padding-x: 20px; display: flex; flex: 1; min-width: 0; position: relative; overflow: hidden; background-color: #0b0d10; }
 #editor-container { position: relative; flex: 1; height: 100%; overflow: hidden; }
-#line-gutter { padding: var(--editor-padding-y) 10px; background-color: #080a0d; color: #35453e; font-family: var(--editor-font); font-size: var(--editor-font-size); font-weight: 400; font-style: normal; line-height: var(--editor-line-height); letter-spacing: 0; font-variant-ligatures: none; text-align: right; user-select: none; border-right: 1px solid #1c2321; min-width: 45px; white-space: pre; overflow: hidden; box-sizing: border-box; }
+#line-gutter { padding: var(--editor-padding-y) 10px; background-color: #080a0d; color: #35453e; font-family: var(--editor-font); font-size: var(--editor-font-size); font-weight: 400; font-style: normal; line-height: var(--editor-line-height); letter-spacing: 0; font-variant-ligatures: none; font-synthesis: none; text-align: right; user-select: none; border-right: 1px solid #1c2321; min-width: 45px; white-space: pre; overflow: hidden; box-sizing: border-box; }
 #current-line-highlight { position: absolute; top: var(--editor-padding-y); left: 0; right: 0; height: var(--editor-line-height); box-sizing: border-box; background: rgba(116,168,150,.09); border-left: 2px solid rgba(116,168,150,.38); pointer-events: none; z-index: 0; }
-#highlight-overlay, #code-editor { font-family: var(--editor-font); font-size: var(--editor-font-size); font-weight: 400; font-style: normal; line-height: var(--editor-line-height); letter-spacing: 0; font-variant-ligatures: none; tab-size: 4; -moz-tab-size: 4; white-space: pre; overflow-wrap: normal; word-break: normal; }
+#highlight-overlay, #code-editor { font-family: var(--editor-font); font-size: var(--editor-font-size); font-weight: 400; font-style: normal; line-height: var(--editor-line-height); letter-spacing: 0; font-variant-ligatures: none; font-synthesis: none; tab-size: 4; -moz-tab-size: 4; white-space: pre; overflow-wrap: normal; word-break: normal; }
 #highlight-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: var(--editor-padding-y) var(--editor-padding-x); box-sizing: border-box; overflow: hidden; pointer-events: none; color: #d1d5db; background: transparent; z-index: 1; word-wrap: normal; }
 #code-editor { position: absolute; top: 0; left: 0; width: 100%; height: 100%; margin: 0; padding: var(--editor-padding-y) var(--editor-padding-x); box-sizing: border-box; background: transparent; color: transparent !important; -webkit-text-fill-color: transparent !important; caret-color: #74a896; border: none; outline: none; overflow-y: auto; overflow-x: auto; z-index: 2; user-select: text; cursor: text; }
 #code-editor::selection { background: rgba(116,168,150,.28); }
@@ -194,7 +194,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 #code-editor::-webkit-scrollbar-thumb:hover { background: #528b74; }
 .token-keyword { color: #FFB86C; }
 .token-string { color: #06CF7A; }
-.token-comment { color: #6272A4; font-style: italic; }
+.token-comment { color: #6272A4; font-style: normal; }
 .token-number { color: #FF79C6; }
 .token-type { color: #8BE9FD; }
 .token-fn { color: #f1fa8c; }
@@ -205,7 +205,7 @@ body { font-family: 'Inter', system-ui, -apple-system, sans-serif; margin: 0; ba
 .token-tag { color: #FF79C6; }
 .token-property { color: #FFB86C; }
 .token-value { color: #FFB86C; }
-.token-decorator { color: #bd93f9; font-style: italic; }
+.token-decorator { color: #bd93f9; font-style: normal; }
 .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background-color: rgba(0, 0, 0, 0.85); display: none; justify-content: center; align-items: center; z-index: 10000; backdrop-filter: blur(6px); }
 .modal-overlay.show { display: flex; }
 .modal-card { background-color: #111413; border: 1px solid #232d2a; border-radius: 12px; width: 360px; padding: 25px; box-shadow: 0 15px 40px rgba(0,0,0,0.8); animation: modalScale 0.2s cubic-bezier(0.16, 1, 0.3, 1); }

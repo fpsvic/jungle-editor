@@ -1035,6 +1035,7 @@ editor.oninput = () => {
         }
     }
     JungleUI.updateCodeHighlight();
+    syncEditorViewport();
     updateTemplateBtnVisibility();
     scheduleLiveAnalysis();
 };
@@ -1126,15 +1127,48 @@ async function runLiveAnalysis() {
     // Update the console panel content + badge in place (don't switch the active view).
     showConsoleIssues(issues, p.currentFile);
 }
+// Keep the visual layers on the same scrollport as the contenteditable. The
+// editor's native scrollbars reduce its client width/height, while the
+// overlay and gutter intentionally hide their own scrollbars. At the far
+// bottom-right that difference used to clamp them a few pixels early, making
+// the caret/highlight appear detached from the visible code.
+function syncEditorViewport() {
+    if (!editor || !highlightOverlay || !lineGutter) return;
+    const viewportWidth = editor.clientWidth;
+    const viewportHeight = editor.clientHeight;
+    if (viewportWidth > 0) highlightOverlay.style.width = `${viewportWidth}px`;
+    if (viewportHeight > 0) {
+        highlightOverlay.style.height = `${viewportHeight}px`;
+        lineGutter.style.height = `${viewportHeight}px`;
+    }
+
+    const editorMaxX = Math.max(0, editor.scrollWidth - editor.clientWidth);
+    const editorMaxY = Math.max(0, editor.scrollHeight - editor.clientHeight);
+    const xProgress = editorMaxX > 0 ? Math.max(0, Math.min(1, editor.scrollLeft / editorMaxX)) : 0;
+    const yProgress = editorMaxY > 0 ? Math.max(0, Math.min(1, editor.scrollTop / editorMaxY)) : 0;
+    const syncTarget = target => {
+        const maxX = Math.max(0, target.scrollWidth - target.clientWidth);
+        const maxY = Math.max(0, target.scrollHeight - target.clientHeight);
+        target.scrollLeft = maxX * xProgress;
+        target.scrollTop = maxY * yProgress;
+    };
+    syncTarget(highlightOverlay);
+    syncTarget(lineGutter);
+}
+
 editor.onscroll = () => {
-    highlightOverlay.scrollTop = lineGutter.scrollTop = editor.scrollTop;
-    highlightOverlay.scrollLeft = editor.scrollLeft;
+    syncEditorViewport();
     JungleUI.updateCurrentLineHighlight?.();
 };
 ['click', 'keyup', 'mouseup', 'focus'].forEach(type => editor.addEventListener(type, () => JungleUI.updateCurrentLineHighlight?.()));
 document.addEventListener('selectionchange', () => {
     if (document.activeElement === editor || editor.contains(document.getSelection?.()?.anchorNode)) JungleUI.updateCurrentLineHighlight?.();
 });
+window.addEventListener('resize', syncEditorViewport);
+if (typeof ResizeObserver !== 'undefined') {
+    const editorViewportObserver = new ResizeObserver(() => syncEditorViewport());
+    editorViewportObserver.observe(editor);
+}
 editor.onkeydown = (e) => {
     if (e.key === 'Tab') {
         e.preventDefault();

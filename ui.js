@@ -393,6 +393,7 @@ class JungleUI {
         currentLanguageText.textContent = selectedLanguages[0];
         switchView('editor');
         this.updateCodeHighlight();
+        if (typeof syncEditorViewport === 'function') syncEditorViewport();
         this.updateLinesOfCodeCount();
         JungleStorage.saveProjects(projects);
         if (typeof updateTemplateBtnVisibility === 'function') updateTemplateBtnVisibility();
@@ -582,6 +583,7 @@ class JungleUI {
         }
         highlightOverlay.innerHTML = finalize(escaped);
         this.updateLineNumbers();
+        if (typeof syncEditorViewport === 'function') syncEditorViewport();
         this.updateCurrentLineHighlight();
     }
     static updateCurrentLineHighlight() {
