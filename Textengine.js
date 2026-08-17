@@ -75,6 +75,21 @@ function installJungleCodeAreaAdapter(element) {
             selection.addRange(range);
         } catch (_) {}
     };
+    const normalizeSurface = () => {
+        // Browsers may insert div/br nodes during IME input, drag/drop, or a
+        // rich-text paste. Those nodes have their own block metrics, which can
+        // make the caret and syntax overlay drift away from the gutter. Keep
+        // the editing surface as one plain text node while preserving the
+        // logical selection.
+        const nodes = element.childNodes;
+        const isPlainText = nodes.length === 1 && nodes[0].nodeType === Node.TEXT_NODE;
+        if (isPlainText) return;
+        const selection = selectionOffsets();
+        const value = textContent();
+        element.textContent = value;
+        element.__jungleSelection = selection;
+        setOffsets(selection.start, selection.end);
+    };
 
     Object.defineProperty(element, 'value', {
         configurable: true,
@@ -107,6 +122,7 @@ function installJungleCodeAreaAdapter(element) {
     element.__jungleGetSelection = selectionOffsets;
     element.__jungleSetSelection = setOffsets;
     element.__jungleTextContent = textContent;
+    element.__jungleNormalize = normalizeSurface;
     return element;
 }
 
@@ -143,6 +159,7 @@ class JungleTextEngine {
             this.refreshStatus();
         });
         textarea.addEventListener('input', () => {
+            textarea.__jungleNormalize?.();
             const changed = this.syncModel();
             if (!this.composing && !this.suppressRecord) this.record({ coalesce: true });
             this.hideSuggestions();

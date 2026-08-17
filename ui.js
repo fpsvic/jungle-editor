@@ -589,11 +589,32 @@ class JungleUI {
         if (!marker || !editor) return;
         const code = String(editor.value || '');
         const offset = Number(editor.selectionStart) || 0;
+        const editorStyles = getComputedStyle(editor);
         const line = Math.max(1, code.slice(0, Math.min(offset, code.length)).split('\n').length);
-        const lineHeight = parseFloat(getComputedStyle(editor).lineHeight) || 22;
-        const paddingTop = parseFloat(getComputedStyle(editor).paddingTop) || 20;
+        const lineHeight = parseFloat(editorStyles.lineHeight) || 22;
+        const paddingTop = parseFloat(editorStyles.paddingTop) || 20;
+        let top = paddingTop + ((line - 1) * lineHeight) - (editor.scrollTop || 0);
+
+        // Use the browser's actual caret rectangle when available. This keeps
+        // the marker aligned after font loading, zoom changes, IME input, and
+        // any browser-created line boxes instead of relying only on a guessed
+        // line-height calculation.
+        const selection = window.getSelection?.();
+        if (selection?.rangeCount && editor.contains(selection.anchorNode)) {
+            try {
+                const caret = selection.getRangeAt(0).cloneRange();
+                caret.collapse(true);
+                const rect = caret.getClientRects()[0] || caret.getBoundingClientRect();
+                const container = document.getElementById('editor-container') || editor.parentElement;
+                const containerRect = container?.getBoundingClientRect();
+                if (rect && containerRect && rect.height > 0 && Number.isFinite(rect.top)) {
+                    const leading = Math.max(0, (lineHeight - rect.height) / 2);
+                    top = rect.top - containerRect.top - leading;
+                }
+            } catch (_) {}
+        }
         marker.style.height = `${lineHeight}px`;
-        marker.style.top = `${paddingTop + ((line - 1) * lineHeight) - (editor.scrollTop || 0)}px`;
+        marker.style.top = `${top}px`;
         marker.dataset.line = String(line);
     }
     // Returns syntax-highlighted HTML for arbitrary lang+code (used by Whole Project view)
