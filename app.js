@@ -26,6 +26,7 @@ var terminalViewContainer = document.getElementById('terminal-view-container');
 var terminalViewBody = document.getElementById('terminal-view-body');
 var terminalStatus = document.getElementById('terminal-status');
 var terminalInput = document.getElementById('terminal-input');
+var terminalPromptLabel = document.getElementById('terminal-prompt-label');
 var extensionsBtn = document.getElementById('extensions-btn');
 var fileSearchInput = document.getElementById('file-search-input');
 var languageMenu = document.getElementById('language-menu');
@@ -62,6 +63,12 @@ var activeView = 'editor'; // 'editor', 'preview', 'terminal', 'console'
 var manualLanguageOverride = false;
 var terminalHistory = [];
 var terminalHistoryIdx = -1;
+// The same in-app terminal input control is used for shell commands and for
+// stdin requested by a running program. A pending resolver lets the runner
+// pause until the user enters a value without opening a system terminal.
+var terminalInputMode = 'command';
+var terminalInputPrompt = '';
+var terminalInputResolver = null;
 // Structured console renderer: group findings into collapsible sections and show the
 // exact source context for every line-based issue.
 function showConsoleIssues(issues, filename) {
@@ -145,6 +152,52 @@ function terminalPrint(text) {
     terminalViewBody.textContent += text;
     terminalViewBody.scrollTop = terminalViewBody.scrollHeight;
 }
+function setTerminalInputMode(mode = 'command', prompt = '') {
+    const row = document.getElementById('terminal-input-row');
+    if (!row || !terminalInput) return;
+    terminalInputMode = mode;
+    terminalInputPrompt = String(prompt || '');
+    if (mode === 'program') {
+        row.classList.remove('hidden');
+        terminalInput.removeAttribute('disabled');
+        if (terminalPromptLabel) terminalPromptLabel.textContent = terminalInputPrompt || 'input:';
+        terminalInput.placeholder = 'Enter a value...';
+        terminalInput.setAttribute('aria-label', terminalInputPrompt ? `Program input: ${terminalInputPrompt}` : 'Program input');
+        setTimeout(() => terminalInput.focus(), 0);
+        return;
+    }
+    if (terminalPromptLabel) terminalPromptLabel.textContent = 'jungle:~$';
+    terminalInput.placeholder = 'Type a command...';
+    terminalInput.setAttribute('aria-label', 'Terminal command');
+    // Keep the command prompt hidden after a run unless the user explicitly
+    // opens the terminal panel, matching the existing terminal UX.
+    if (activeView !== 'terminal') {
+        terminalInput.setAttribute('disabled', 'true');
+        row.classList.add('hidden');
+    }
+}
+function requestTerminalInput(prompt = '') {
+    return new Promise(resolve => {
+        terminalInputResolver = resolve;
+        setTerminalInputMode('program', prompt);
+    });
+}
+function finishTerminalInput(value) {
+    if (typeof terminalInputResolver !== 'function') return false;
+    const resolve = terminalInputResolver;
+    terminalInputResolver = null;
+    resolve(String(value ?? ''));
+    return true;
+}
+function cancelPendingTerminalInput() {
+    if (typeof terminalInputResolver === 'function') {
+        const resolve = terminalInputResolver;
+        terminalInputResolver = null;
+        resolve(null);
+    }
+    terminalInputMode = 'command';
+    terminalInputPrompt = '';
+}
 function executeTerminalCommand(cmdLine) {
     const raw = cmdLine.trim();
     if (!raw) return;
@@ -207,6 +260,9 @@ function executeTerminalCommand(cmdLine) {
     open <file>        Switch editor to file
     info               Show project info
     exit               Return to editor view
+
+  PYTHON INPUT
+    Run a Python file with input() and enter each value in the prompt below.
 `);
             break;
         case 'clear':
@@ -394,6 +450,10 @@ function executeTerminalCommand(cmdLine) {
 }
 terminalViewContainer.onclick = () => {
     if (activeView === 'terminal') {
+        if (terminalInputMode === 'program') {
+            terminalInput.focus();
+            return;
+        }
         const row = document.getElementById('terminal-input-row');
         row.classList.remove('hidden');
         terminalInput.removeAttribute('disabled');
@@ -401,6 +461,15 @@ terminalViewContainer.onclick = () => {
     }
 };
 terminalInput.addEventListener('keydown', (e) => {
+    if (terminalInputMode === 'program') {
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const value = terminalInput.value;
+            terminalInput.value = '';
+            finishTerminalInput(value);
+        }
+        return;
+    }
     if (e.key === 'Enter') {
         const cmd = terminalInput.value.trim();
         terminalInput.value = '';
@@ -440,6 +509,7 @@ function highlightActiveFile() {
     });
 }
 function switchView(view, showInput = false) {
+    cancelPendingTerminalInput();
     activeView = view;
     editorWrapper.style.display = previewFrame.style.display = terminalViewContainer.style.display = consoleViewContainer.style.display = 'none';
     if (projectViewContainer) projectViewContainer.style.display = 'none';

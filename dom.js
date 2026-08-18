@@ -390,8 +390,8 @@
                 </div>
                 <pre id="terminal-view-body">Jungle Terminal — type 'help' for commands.</pre>
                 <div id="terminal-input-row" class="flex items-center gap-2 mt-2 border-t border-[#14201b] pt-2 shrink-0">
-                    <span class="text-[#74a896] font-mono text-sm select-none">jungle:~$</span>
-                    <input type="text" id="terminal-input" class="flex-1 bg-transparent border-none outline-none text-[#aed9cb] font-mono text-sm" placeholder="Type a command..." disabled>
+                    <span id="terminal-prompt-label" class="text-[#74a896] font-mono text-sm select-none">jungle:~$</span>
+                    <input type="text" id="terminal-input" class="flex-1 bg-transparent border-none outline-none text-[#aed9cb] font-mono text-sm" placeholder="Type a command..." aria-label="Terminal command" disabled>
                 </div>
             </div>
             <div id="console-view-container" style="display:none;flex-direction:column;flex:1;overflow:hidden;font-family:'Fira Code',monospace;">

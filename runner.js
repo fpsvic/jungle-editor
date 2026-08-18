@@ -77,6 +77,16 @@ class JungleRunner {
             terminalViewBody.textContent = `Preparing ${lang}...`;
             // Merge sibling files of the same language into one bundle for execution
             const bundled = this.bundleFiles(lang, code, files, fname);
+            // Python's normal input() is collected through Jungle's terminal
+            // prompt before the sandbox/API starts. The execution services
+            // receive the resulting stdin buffer; no system terminal is used.
+            const programStdin = lang === 'Python' ? await this.collectPythonStdin(bundled) : '';
+            if (programStdin === null) {
+                terminalStatus.textContent = 'CANCELLED';
+                terminalStatus.className = 'text-[#849690] font-bold';
+                terminalViewBody.textContent = 'Run cancelled before Python input was provided.';
+                return;
+            }
             // Scanners/analyzers can be disabled in Settings — then we skip all pre-run checks
             // and send the plain code straight through, even if it has errors.
             const analysisOn = (typeof JungleSettings === 'undefined') || !JungleSettings.get('disableAnalysis');
@@ -103,7 +113,7 @@ class JungleRunner {
                 }
             }
             if (typeof JungleSettings !== 'undefined' && JungleSettings.get('executionMode') === 'api') {
-                await this.executeWithApis(lang, bundled, p0);
+                await this.executeWithApis(lang, bundled, p0, programStdin);
                 return;
             }
             switchView('terminal', false);
@@ -164,7 +174,7 @@ class JungleRunner {
                 terminalStatus.textContent = "RUNNING";
                 terminalStatus.className = "text-[#74a896] font-bold animate-pulse";
                 try {
-                    const result = await this.runPyodideVisual(code);
+                    const result = await this.runPyodideVisual(code, programStdin);
                     if (result.images.length > 0) {
                         this.renderPyVisualOutput(result.images, result.stdout, result.stderr);
                         return;
@@ -178,14 +188,14 @@ class JungleRunner {
             }
             // ── Tier 6: Judge0 CE — real compilers, online ────────────────────
             terminalViewBody.textContent = `🌐 ${actionLabel}\n   Connecting to Judge0...`;
-            const j0 = await this.runJudge0(lang, code);
+            const j0 = await this.runJudge0(lang, code, programStdin);
             if (j0) {
                 this.showRunResult(j0.stdout, j0.stderr, lang, { compiler: meta.runtime });
                 return;
             }
             // ── Tier 7: Piston cluster — compiled + interpreted, online ────────
             terminalViewBody.textContent = `⚠️ Judge0 unreachable — trying Piston...\n   ${actionLabel}`;
-            const piston = await this.runPistonDirect(lang, code, p);
+            const piston = await this.runPistonDirect(lang, code, p, programStdin);
             if (piston) {
                 this.showRunResult(piston.stdout, piston.stderr, lang);
                 return;
@@ -193,7 +203,7 @@ class JungleRunner {
             // ── Tier 8: WASM offline runtimes — last resort ───────────────────
             const wasmKey = meta.wasm;
             const wasmRunners = {
-                'pyodide':  () => this.runPyodide(code),
+                'pyodide':  () => this.runPyodide(code, programStdin),
                 'php-wasm': () => this.runPhpWasm(code),
                 'wasmoon':  () => this.runLuaWasm(code),
                 'opal':     () => this.runRubyOpal(code),
@@ -220,16 +230,139 @@ class JungleRunner {
         terminalViewBody.scrollTop = terminalViewBody.scrollHeight;
     }
     // ── TypeScript in-browser compilation via CDN tsc ─────────────────────────
-    static async executeWithApis(lang, code, project) {
+    static findPythonInputPrompts(source) {
+        const code = String(source || '');
+        const prompts = [];
+        const isWordStart = char => /[A-Za-z_]/.test(char || '');
+        const isWord = char => /[A-Za-z0-9_]/.test(char || '');
+        const skipString = start => {
+            const quote = code[start];
+            const triple = code.slice(start, start + 3) === quote.repeat(3);
+            const width = triple ? 3 : 1;
+            let index = start + width;
+            while (index < code.length) {
+                if (code[index] === '\\') { index += 2; continue; }
+                if (triple ? code.slice(index, index + 3) === quote.repeat(3) : code[index] === quote) return index + width;
+                index++;
+            }
+            return code.length;
+        };
+        const findClosing = open => {
+            let depth = 1;
+            let index = open + 1;
+            while (index < code.length) {
+                const char = code[index];
+                if (char === '#') {
+                    const end = code.indexOf('\n', index);
+                    index = end < 0 ? code.length : end;
+                    continue;
+                }
+                if (char === '"' || char === "'") { index = skipString(index); continue; }
+                if (char === '(') depth++;
+                else if (char === ')' && --depth === 0) return index;
+                index++;
+            }
+            return -1;
+        };
+        const firstArgument = args => {
+            let depth = 0;
+            for (let index = 0; index < args.length; index++) {
+                const char = args[index];
+                if (char === '"' || char === "'") {
+                    let end = index + 1;
+                    while (end < args.length) {
+                        if (args[end] === '\\') { end += 2; continue; }
+                        if (args[end] === char) { index = end; break; }
+                        end++;
+                    }
+                    continue;
+                }
+                if ('([{'.includes(char)) depth++;
+                else if (')]}'.includes(char)) depth = Math.max(0, depth - 1);
+                else if (char === ',' && depth === 0) return args.slice(0, index).trim();
+            }
+            return args.trim();
+        };
+        const promptText = argument => {
+            const value = String(argument || '').trim();
+            if (!value) return '';
+            if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+                return value.slice(1, -1)
+                    .replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+                    .replace(/\\([\\"'])/g, '$1');
+            }
+            return 'Input required:';
+        };
+        let index = 0;
+        while (index < code.length) {
+            const char = code[index];
+            if (char === '#') {
+                const end = code.indexOf('\n', index);
+                index = end < 0 ? code.length : end;
+                continue;
+            }
+            if (char === '"' || char === "'") { index = skipString(index); continue; }
+            if (!isWordStart(char)) { index++; continue; }
+            const wordStart = index;
+            index++;
+            while (index < code.length && isWord(code[index])) index++;
+            const word = code.slice(wordStart, index);
+            if (word === 'sys') {
+                const stdinMatch = /^\s*\.\s*stdin\s*\.\s*(?:readline|read)\s*/.exec(code.slice(index));
+                if (stdinMatch) {
+                    const open = index + stdinMatch[0].length;
+                    if (code[open] === '(') {
+                        const close = findClosing(open);
+                        if (close >= 0) {
+                            prompts.push('');
+                            index = close + 1;
+                            continue;
+                        }
+                    }
+                }
+            }
+            const beforeWord = code.slice(Math.max(0, wordStart - 8), wordStart);
+            if (word !== 'input' || isWord(code[wordStart - 1]) || /\b(?:def|class)\s*$/.test(beforeWord)) continue;
+            while (/\s/.test(code[index] || '')) index++;
+            if (code[index] !== '(') continue;
+            const close = findClosing(index);
+            if (close < 0) continue;
+            prompts.push(promptText(firstArgument(code.slice(index + 1, close))));
+            index = close + 1;
+        }
+        return prompts;
+    }
+    static async collectPythonStdin(code) {
+        const prompts = this.findPythonInputPrompts(code);
+        if (prompts.length === 0) return '';
+        terminalStatus.textContent = 'INPUT';
+        terminalStatus.className = 'text-[#FFB86C] font-bold animate-pulse';
+        terminalViewBody.textContent = 'Python is waiting for input. Values are sent to the selected sandbox runtime.\n\n';
+        const values = [];
+        for (let index = 0; index < prompts.length; index++) {
+            const prompt = prompts[index] || `Input ${index + 1}:`;
+            terminalPrint(prompt.endsWith(' ') || prompt.endsWith(':') ? prompt : `${prompt} `);
+            const value = await requestTerminalInput(prompt);
+            if (value === null) return null;
+            values.push(value);
+            terminalPrint(`${value}\n`);
+        }
+        setTerminalInputMode('command');
+        const inputRow = document.getElementById('terminal-input-row');
+        inputRow?.classList.add('hidden');
+        terminalInput?.setAttribute('disabled', 'true');
+        return values.join('\n') + '\n';
+    }
+    static async executeWithApis(lang, code, project, stdin = '') {
         const meta = this.LANG_META[lang] || { runtime: lang };
         switchView('terminal', false);
         terminalStatus.textContent = 'CONNECTING';
         terminalStatus.className = 'text-[#74a896] font-bold animate-pulse';
         terminalViewBody.textContent = 'Running with real APIs...\n   Connecting to Judge0...';
-        const judge = await this.runJudge0(lang, code);
+        const judge = await this.runJudge0(lang, code, stdin);
         if (judge) { this.showRunResult(judge.stdout, judge.stderr, lang, { compiler: meta.runtime }); return; }
         terminalViewBody.textContent = 'Judge0 unavailable — trying Piston...';
-        const piston = await this.runPistonDirect(lang, code, project);
+        const piston = await this.runPistonDirect(lang, code, project, stdin);
         if (piston) { this.showRunResult(piston.stdout, piston.stderr, lang, { compiler: meta.runtime }); return; }
         terminalStatus.textContent = 'API OFFLINE';
         terminalStatus.className = 'text-rose-500 font-bold';
@@ -343,7 +476,7 @@ ${escaped}
         JungleUI.showToast("Visual output shown in Preview panel.", null);
     }
     // ── Pyodide visual: run matplotlib/turtle code, capture PNG images ────────
-    static async runPyodideVisual(code) {
+    static async runPyodideVisual(code, stdin = '') {
         if (!window._pyodide) {
             await new Promise((res, rej) => {
                 const s = document.createElement('script');
@@ -364,8 +497,11 @@ ${escaped}
             /\b(?:screen|turtle|t|wn)\s*\.\s*(?:exitonclick|done|mainloop|listen)\s*\(\s*\)/g,
             'pass  # browser: event loop disabled'
         );
+        const stdinLiteral = JSON.stringify(String(stdin || ''));
         const wrapper = `
 import io as _io_j, base64 as _b64_j
+import sys as _sys_j
+_sys_j.stdin = _io_j.StringIO(${stdinLiteral})
 _jngl_imgs = []
 _jngl_stderr = []
 
@@ -475,7 +611,7 @@ try{${code.replace(/<\/script>/gi,'<\\/script>')}\nparent.postMessage({__jDone:t
         });
     }
     // ── Pyodide — Python WASM (offline fallback) ──────────────────────────────
-    static async runPyodide(code) {
+    static async runPyodide(code, stdin = '') {
         if (!window._pyodide) {
             terminalViewBody.textContent = "⏳ Loading Python WASM (~10 MB, cached after first load)...";
             await new Promise((res, rej) => {
@@ -490,7 +626,11 @@ try{${code.replace(/<\/script>/gi,'<\\/script>')}\nparent.postMessage({__jDone:t
         const out = [], err = [];
         py.setStdout({ batched: s => out.push(s) });
         py.setStderr({ batched: s => err.push(s) });
-        try { await py.runPythonAsync(code); }
+        const stdinLiteral = JSON.stringify(String(stdin || ''));
+        const source = stdin
+            ? `import io as _jungle_io\nimport sys as _jungle_sys\n_jungle_sys.stdin = _jungle_io.StringIO(${stdinLiteral})\n${code}`
+            : code;
+        try { await py.runPythonAsync(source); }
         catch (e) { err.push(e.message); }
         return { stdout: out.join('\n'), stderr: err.join('\n') };
     }
@@ -668,7 +808,7 @@ try{${code.replace(/<\/script>/gi,'<\\/script>')}\nparent.postMessage({__jDone:t
         }
     }
     // ── Judge0 CE — real compilers, 35+ languages ─────────────────────────────
-    static async runJudge0(lang, code) {
+    static async runJudge0(lang, code, stdin = '') {
         const meta = this.LANG_META[lang];
         const id = meta && meta.judge0;
         if (!id) return null;
@@ -679,7 +819,7 @@ try{${code.replace(/<\/script>/gi,'<\\/script>')}\nparent.postMessage({__jDone:t
             `https://corsproxy.io/?${base}`,
             `https://api.allorigins.win/raw?url=${enc(base)}`,
         ];
-        const body = JSON.stringify({ source_code: code, language_id: id, stdin: '' });
+        const body = JSON.stringify({ source_code: code, language_id: id, stdin: String(stdin || '') });
         for (const proxy of proxies) {
             try {
                 const res = await fetch(`${proxy}/submissions?base64_encoded=false&wait=true`, {
@@ -697,13 +837,13 @@ try{${code.replace(/<\/script>/gi,'<\\/script>')}\nparent.postMessage({__jDone:t
         return null;
     }
     // ── Piston — returns {stdout, stderr} or null ─────────────────────────────
-    static async runPistonDirect(lang, code, p) {
+    static async runPistonDirect(lang, code, p, stdin = '') {
         const meta = this.LANG_META[lang];
         const pistonLang = (meta && meta.piston) || lang.toLowerCase();
         if (!pistonLang) return null;
         const filesArray = [{ name: p.currentFile || 'main', content: code }];
         Object.keys(p.files).forEach(f => { if (f !== p.currentFile) filesArray.push({ name: f, content: p.files[f] }); });
-        const payload = { language: pistonLang, version: '*', files: filesArray };
+        const payload = { language: pistonLang, version: '*', files: filesArray, stdin: String(stdin || '') };
         const e1 = 'https://emkc.org/api/v2/piston/execute';
         const e2 = 'https://piston.engineering.purdue.edu/api/v2/piston/execute';
         const enc = encodeURIComponent;
